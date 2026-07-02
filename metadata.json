@@ -1,0 +1,6 @@
+{
+  "name": "Bell24h-OS",
+  "description": "Enterprise SaaS platform foundation with AI provider abstraction and modular architecture.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
