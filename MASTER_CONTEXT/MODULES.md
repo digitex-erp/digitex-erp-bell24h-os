@@ -15,3 +15,6 @@
 - Enterprise Campaign Intelligence Platform
 - Enterprise Media Composer Platform
 - Enterprise Publishing Center Platform
+- Enterprise Automation & Workflow Platform
+- Enterprise Performance Intelligence & Learning Engine
+- System Diagnostics & Infrastructure Monitor

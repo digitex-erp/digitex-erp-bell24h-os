@@ -13,8 +13,29 @@ async function startServer() {
     res.json({ status: "ok" });
   });
 
-  app.get("/api/env", (req, res) => {
-    res.json({ keys: Object.keys(process.env) });
+  app.get("/api/env/diagnostic", (req, res) => {
+    const keysToCheck = [
+      'VITE_SUPABASE_URL', 
+      'VITE_SUPABASE_KEY', 
+      'VITE_SUPABASE_ANON_KEY',
+      'SUPABASE_URL', 
+      'SUPABASE_KEY', 
+      'SUPABASE_ANON_KEY',
+      'DATABASE_URL',
+      'GEMINI_API_KEY'
+    ];
+    
+    const diagnostics = keysToCheck.reduce((acc: any, key) => {
+      const val = process.env[key];
+      acc[key] = {
+        loaded: !!val,
+        length: val ? val.length : 0,
+        suffix: val ? (val.length > 8 ? `...${val.slice(-8)}` : val) : null
+      };
+      return acc;
+    }, {});
+
+    res.json(diagnostics);
   });
 
   app.get("/api/migrate", async (req, res) => {

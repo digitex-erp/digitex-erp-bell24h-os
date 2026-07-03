@@ -27,6 +27,10 @@ import { CampaignDashboardPage } from "@/pages/CampaignDashboardPage";
 import { CampaignBuilderPage } from "@/pages/CampaignBuilderPage";
 import { MediaComposerDashboardPage } from "@/pages/MediaComposerDashboardPage";
 import { PublishingCenterPage } from "@/pages/PublishingCenterPage";
+import { AutomationDashboardPage } from "@/pages/AutomationDashboardPage";
+import { AutomationBuilderPage } from "@/pages/AutomationBuilderPage";
+import { PerformanceDashboardPage } from "@/pages/PerformanceDashboardPage";
+import { SystemDiagnosticsPage } from "@/pages/SystemDiagnosticsPage";
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
@@ -54,6 +58,7 @@ export default function App() {
         <Route path="/auth/login" element={<AuthPage />} />
         <Route path="/auth/signup" element={<AuthPage />} />
         <Route path="/auth/forgot-password" element={<AuthPage />} />
+        <Route path="/system/diagnostics" element={<SystemDiagnosticsPage />} />
         
         <Route path="/" element={<ProtectedRoute><AppLayout /></ProtectedRoute>}>
           <Route index element={<Navigate to="/dashboard" replace />} />
@@ -72,6 +77,9 @@ export default function App() {
           <Route path="campaigns/builder" element={<CampaignBuilderPage />} />
           <Route path="media-composer" element={<MediaComposerDashboardPage />} />
           <Route path="publishing-center" element={<PublishingCenterPage />} />
+          <Route path="automation" element={<AutomationDashboardPage />} />
+          <Route path="automation/builder" element={<AutomationBuilderPage />} />
+          <Route path="performance-intelligence" element={<PerformanceDashboardPage />} />
           <Route path="settings" element={<SettingsPage />} />
           <Route path="admin" element={<AdminPage />} />
           <Route path="database" element={<DatabasePage />} />

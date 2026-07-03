@@ -7,5 +7,5 @@ Bell24h-OS is a full-stack TypeScript application.
 - **Database**: PostgreSQL (Supabase)
 - **Authentication**: Supabase Auth
 - **AI**: Google Generative AI (Gemini)
-- **Intelligence Modules**: SEO, Campaign, Media Composer, Publishing Center, and Industry Intelligence engines.
+- **Intelligence Modules**: SEO, Campaign, Media Composer, Publishing Center, Automation, Performance, and Industry Intelligence engines.
 - **Deployment**: Cloud Run

@@ -104,6 +104,11 @@ const sidebarNavItems = [
     href: "/database",
     icon: Database,
   },
+  {
+    title: "Diagnostics",
+    href: "/system/diagnostics",
+    icon: Activity,
+  },
 ];
 
 export function AppLayout() {

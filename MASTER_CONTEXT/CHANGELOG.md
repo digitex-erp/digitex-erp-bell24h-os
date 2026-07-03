@@ -6,3 +6,6 @@
 - 2026-07-03: Enterprise Campaign Intelligence Platform (Campaign Builder, Campaign Assets).
 - 2026-07-03: Enterprise Media Composer Platform (Package Orchestration, Compositions, Exports).
 - 2026-07-03: Enterprise Publishing Center Platform (Publishing Engine, Scheduler, Queue).
+- 2026-07-03: Enterprise Automation & Workflow Platform (Visual Builder, Node Engine, Triggers, Actions).
+- 2026-07-03: Enterprise Performance Intelligence & Learning Engine (ROI Analytics, AI Recommendations, Optimization Health).
+- 2026-07-03: Production Authentication Recovery (Diagnostics, Supabase Client Refactor, Env Robustness).

@@ -38,7 +38,7 @@ export function AuthPage() {
     
     try {
       if (!SUPABASE_CONFIGURED) {
-        throw new Error("Supabase is not configured. Please add SUPABASE_URL and SUPABASE_KEY to your AI Studio Secrets panel.");
+        throw new Error("Supabase is not configured. Please check /system/diagnostics and ensure VITE_SUPABASE_URL and VITE_SUPABASE_KEY are added to your AI Studio Secrets panel.");
       }
 
       if (mode === "login") {
