@@ -555,3 +555,10 @@ CREATE POLICY "Public Access" ON storage.objects FOR SELECT USING (bucket_id = '
 CREATE POLICY "Auth Upload" ON storage.objects FOR INSERT WITH CHECK (bucket_id = 'organization-logos' AND auth.role() = 'authenticated');
 CREATE POLICY "Auth Update" ON storage.objects FOR UPDATE USING (bucket_id = 'organization-logos' AND auth.role() = 'authenticated');
 CREATE POLICY "Auth Delete" ON storage.objects FOR DELETE USING (bucket_id = 'organization-logos' AND auth.role() = 'authenticated');
+ALTER TABLE public.profiles
+ADD COLUMN IF NOT EXISTS designation TEXT,
+ADD COLUMN IF NOT EXISTS department TEXT,
+ADD COLUMN IF NOT EXISTS phone TEXT,
+ADD COLUMN IF NOT EXISTS timezone TEXT,
+ADD COLUMN IF NOT EXISTS language TEXT,
+ADD COLUMN IF NOT EXISTS preferences JSONB;

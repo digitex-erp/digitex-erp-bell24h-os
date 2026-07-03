@@ -14,6 +14,7 @@ import { useAuthStore } from "@/store/useAuthStore";
 import { useAuth } from "@/hooks/useAuth";
 
 import { OrganizationPage } from "@/pages/OrganizationPage";
+import { TeamPage } from "@/pages/TeamPage";
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
@@ -46,6 +47,7 @@ export default function App() {
           <Route index element={<Navigate to="/dashboard" replace />} />
           <Route path="dashboard" element={<DashboardPage />} />
           <Route path="organization" element={<OrganizationPage />} />
+          <Route path="team" element={<TeamPage />} />
           <Route path="settings" element={<SettingsPage />} />
           <Route path="admin" element={<AdminPage />} />
           <Route path="database" element={<DatabasePage />} />

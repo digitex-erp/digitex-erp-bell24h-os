@@ -1,76 +1,91 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Activity, CreditCard, DollarSign, Users, Server, BrainCircuit, Cpu, Database } from "lucide-react";
+import { Activity, CreditCard, Users, Database, Building2, Server, BrainCircuit, Cpu } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
+import { useAuthStore } from "@/store/useAuthStore";
 
 export function DashboardPage() {
+  const { user } = useAuthStore();
   const [userCount, setUserCount] = useState(0);
-  const [orgCount, setOrgCount] = useState(0);
+  const [roleCount, setRoleCount] = useState(0);
+  const [activeUserCount, setActiveUserCount] = useState(0);
+  const [orgName, setOrgName] = useState("");
   
   useEffect(() => {
     async function fetchMetrics() {
+      if (!user) return;
       try {
-        const { count: users } = await supabase.from('profiles').select('*', { count: 'exact', head: true });
-        if (users !== null) setUserCount(users);
+        const { data: profile } = await supabase.from('profiles').select('organization_id').eq('id', user.id).single();
         
-        const { count: orgs } = await supabase.from('organizations').select('*', { count: 'exact', head: true });
-        if (orgs !== null) setOrgCount(orgs);
+        if (profile?.organization_id) {
+          const { data: orgData } = await supabase.from('organizations').select('name').eq('id', profile.organization_id).single();
+          if (orgData) setOrgName(orgData.name);
+
+          const { count: users } = await supabase.from('profiles').select('*', { count: 'exact', head: true }).eq('organization_id', profile.organization_id);
+          if (users !== null) setUserCount(users);
+
+          const { count: activeUsers } = await supabase.from('profiles').select('*', { count: 'exact', head: true }).eq('organization_id', profile.organization_id).eq('is_active', true);
+          if (activeUsers !== null) setActiveUserCount(activeUsers);
+          
+          const { count: roles } = await supabase.from('roles').select('*', { count: 'exact', head: true }).eq('organization_id', profile.organization_id);
+          if (roles !== null) setRoleCount(roles);
+        }
       } catch (err) {
         console.error("Failed to fetch metrics", err);
       }
     }
     fetchMetrics();
-  }, []);
+  }, [user]);
 
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-2">
         <h1 className="text-3xl font-bold tracking-tight">Dashboard</h1>
         <p className="text-muted-foreground">
-          Welcome back to Bell24h-OS. Here is an overview of your platform.
+          Welcome back. Here is an overview of your organization{orgName ? ` (${orgName})` : ''}.
         </p>
       </div>
 
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium">Organizations</CardTitle>
-            <DollarSign className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{orgCount}</div>
-            <p className="text-xs text-muted-foreground">Registered tenants</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium">Total Users</CardTitle>
+            <CardTitle className="text-sm font-medium">Team Members</CardTitle>
             <Users className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{userCount}</div>
-            <p className="text-xs text-muted-foreground">Across all organizations</p>
+            <p className="text-xs text-muted-foreground">Registered in your organization</p>
           </CardContent>
         </Card>
         <Card>
           <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium">Total RFQs</CardTitle>
-            <CreditCard className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">0</div>
-            <p className="text-xs text-muted-foreground">In your organization</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium">Active Tasks</CardTitle>
+            <CardTitle className="text-sm font-medium">Active Users</CardTitle>
             <Activity className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">0</div>
-            <p className="text-xs text-muted-foreground">Pending completion</p>
+            <div className="text-2xl font-bold">{activeUserCount}</div>
+            <p className="text-xs text-muted-foreground">Currently active accounts</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between pb-2">
+            <CardTitle className="text-sm font-medium">Roles Configured</CardTitle>
+            <Building2 className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{roleCount}</div>
+            <p className="text-xs text-muted-foreground">Available roles in your org</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between pb-2">
+            <CardTitle className="text-sm font-medium">System Status</CardTitle>
+            <Database className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-emerald-500">Online</div>
+            <p className="text-xs text-muted-foreground">All systems operational</p>
           </CardContent>
         </Card>
       </div>

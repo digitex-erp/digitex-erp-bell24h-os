@@ -14,7 +14,8 @@ import {
   ChevronsUpDown,
   LogOut,
   User,
-  Building
+  Building,
+  Shield
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -43,9 +44,14 @@ const sidebarNavItems = [
     icon: Building,
   },
   {
+    title: "Team",
+    href: "/team",
+    icon: Users,
+  },
+  {
     title: "Admin",
     href: "/admin",
-    icon: Users,
+    icon: Shield,
   },
   {
     title: "Settings",
