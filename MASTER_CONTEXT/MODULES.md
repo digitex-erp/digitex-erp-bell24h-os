@@ -11,3 +11,6 @@
 - Global Job Orchestrator
 - Enterprise Industry Intelligence Platform
 - Context Engine
+- Enterprise SEO Intelligence Platform
+- Enterprise Campaign Intelligence Platform
+- Enterprise Media Composer Platform

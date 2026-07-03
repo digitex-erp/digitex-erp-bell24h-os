@@ -8,3 +8,6 @@ Bell24h-OS utilizes a normalized PostgreSQL database, managed via Supabase.
 - **Orchestrator**: Job queues, workers, scheduling.
 - **Industry Intelligence**: Master business data hierarchy.
 - **Context Engine**: Reusable context profiles.
+- **SEO Intelligence**: Keywords, opportunities, and search intent.
+- **Campaign Intelligence**: Multi-channel campaign management and orchestration.
+- **Media Composer**: Asset package orchestration, compositions, and exports.

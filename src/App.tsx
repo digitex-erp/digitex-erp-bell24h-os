@@ -23,6 +23,9 @@ import { VideoStudioPage } from "@/pages/VideoStudioPage";
 import { JobOrchestratorPage } from "@/pages/JobOrchestratorPage";
 import { ContextProfileManagerPage } from "@/pages/ContextProfileManagerPage";
 import { SeoDashboardPage } from "@/pages/SeoDashboardPage";
+import { CampaignDashboardPage } from "@/pages/CampaignDashboardPage";
+import { CampaignBuilderPage } from "@/pages/CampaignBuilderPage";
+import { MediaComposerDashboardPage } from "@/pages/MediaComposerDashboardPage";
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
@@ -64,6 +67,9 @@ export default function App() {
           <Route path="job-orchestrator" element={<JobOrchestratorPage />} />
           <Route path="context-profiles" element={<ContextProfileManagerPage />} />
           <Route path="seo-intelligence" element={<SeoDashboardPage />} />
+          <Route path="campaigns" element={<CampaignDashboardPage />} />
+          <Route path="campaigns/builder" element={<CampaignBuilderPage />} />
+          <Route path="media-composer" element={<MediaComposerDashboardPage />} />
           <Route path="settings" element={<SettingsPage />} />
           <Route path="admin" element={<AdminPage />} />
           <Route path="database" element={<DatabasePage />} />
