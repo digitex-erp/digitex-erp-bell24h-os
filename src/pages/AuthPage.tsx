@@ -5,7 +5,7 @@ import { Label } from "@/components/ui/label";
 import { Command } from "lucide-react";
 import { useState } from "react";
 import { useLocation, useNavigate, Link, Navigate } from "react-router-dom";
-import { supabase } from "@/lib/supabase";
+import { supabase, SUPABASE_CONFIGURED } from "@/lib/supabase";
 import { useAuthStore } from "@/store/useAuthStore";
 
 export function AuthPage() {
@@ -13,6 +13,7 @@ export function AuthPage() {
   const location = useLocation();
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
   const isLoadingAuth = useAuthStore((state) => state.isLoading);
+
   const [isLoading, setIsLoading] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -36,6 +37,10 @@ export function AuthPage() {
     setSuccess(null);
     
     try {
+      if (!SUPABASE_CONFIGURED) {
+        throw new Error("Supabase is not configured. Please add SUPABASE_URL and SUPABASE_KEY to your AI Studio Secrets panel.");
+      }
+
       if (mode === "login") {
         const { error } = await supabase.auth.signInWithPassword({
           email,

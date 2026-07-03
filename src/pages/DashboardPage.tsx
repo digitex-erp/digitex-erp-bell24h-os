@@ -11,11 +11,13 @@ export function DashboardPage() {
   const [roleCount, setRoleCount] = useState(0);
   const [activeUserCount, setActiveUserCount] = useState(0);
   const [orgName, setOrgName] = useState("");
+  const [loading, setLoading] = useState(true);
   
   useEffect(() => {
     async function fetchMetrics() {
       if (!user) return;
       try {
+        setLoading(true);
         const { data: profile } = await supabase.from('profiles').select('organization_id').eq('id', user.id).single();
         
         if (profile?.organization_id) {
@@ -33,10 +35,20 @@ export function DashboardPage() {
         }
       } catch (err) {
         console.error("Failed to fetch metrics", err);
+      } finally {
+        setLoading(false);
       }
     }
     fetchMetrics();
   }, [user]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <Activity className="h-8 w-8 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
