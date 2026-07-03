@@ -427,6 +427,10 @@ export function AiProvidersPage() {
                       <SelectItem value="deepseek">DeepSeek</SelectItem>
                       <SelectItem value="qwen">Qwen</SelectItem>
                       <SelectItem value="glm">GLM</SelectItem>
+                      <SelectItem value="opensora">Open-Sora</SelectItem>
+                      <SelectItem value="cogvideox">CogVideoX</SelectItem>
+                      <SelectItem value="ltxvideo">LTX Video</SelectItem>
+                      <SelectItem value="hunyuan">Hunyuan Video</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>

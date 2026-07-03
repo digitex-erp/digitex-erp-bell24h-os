@@ -17,7 +17,11 @@ import {
   Building,
   Shield,
   BrainCircuit,
-  TerminalSquare
+  TerminalSquare,
+  FileText,
+  Image as ImageIcon,
+  Video as VideoIcon,
+  Activity
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -59,6 +63,26 @@ const sidebarNavItems = [
     title: "Prompt Studio",
     href: "/prompt-studio",
     icon: TerminalSquare,
+  },
+  {
+    title: "Content Planner",
+    href: "/content-planner",
+    icon: FileText,
+  },
+  {
+    title: "Image Studio",
+    href: "/image-studio",
+    icon: ImageIcon,
+  },
+  {
+    title: "Video Studio",
+    href: "/video-studio",
+    icon: VideoIcon,
+  },
+  {
+    title: "Job Orchestrator",
+    href: "/job-orchestrator",
+    icon: Activity,
   },
   {
     title: "Admin",

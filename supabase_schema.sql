@@ -727,3 +727,550 @@ CREATE POLICY "User isolation select" ON public.prompt_favorites FOR SELECT USIN
 CREATE POLICY "User isolation insert" ON public.prompt_favorites FOR INSERT WITH CHECK (user_id = auth.uid());
 CREATE POLICY "User isolation delete" ON public.prompt_favorites FOR DELETE USING (user_id = auth.uid());
 
+-- Content Projects
+CREATE TABLE IF NOT EXISTS public.content_projects (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name TEXT NOT NULL,
+    brand TEXT,
+    language TEXT,
+    industry TEXT,
+    target_audience TEXT,
+    country TEXT,
+    tone TEXT,
+    content_goal TEXT,
+    organization_id UUID REFERENCES public.organizations(id) ON DELETE CASCADE,
+    created_by UUID REFERENCES public.profiles(id),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Content Topics
+CREATE TABLE IF NOT EXISTS public.content_topics (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    project_id UUID REFERENCES public.content_projects(id) ON DELETE CASCADE,
+    topic TEXT NOT NULL,
+    source TEXT DEFAULT 'manual', -- manual, csv, keyword, search_console
+    status TEXT DEFAULT 'pending', -- pending, generating, completed, failed
+    organization_id UUID REFERENCES public.organizations(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Content Jobs
+CREATE TABLE IF NOT EXISTS public.content_jobs (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    topic_id UUID REFERENCES public.content_topics(id) ON DELETE CASCADE,
+    content_type TEXT NOT NULL,
+    status TEXT DEFAULT 'queued', -- queued, running, completed, failed
+    error_message TEXT,
+    organization_id UUID REFERENCES public.organizations(id) ON DELETE CASCADE,
+    started_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Content Outputs
+CREATE TABLE IF NOT EXISTS public.content_outputs (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    job_id UUID REFERENCES public.content_jobs(id) ON DELETE CASCADE,
+    topic_id UUID REFERENCES public.content_topics(id) ON DELETE CASCADE,
+    content_type TEXT NOT NULL,
+    content TEXT NOT NULL,
+    organization_id UUID REFERENCES public.organizations(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Content Assets
+CREATE TABLE IF NOT EXISTS public.content_assets (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    output_id UUID REFERENCES public.content_outputs(id) ON DELETE CASCADE,
+    asset_url TEXT NOT NULL,
+    asset_type TEXT NOT NULL,
+    organization_id UUID REFERENCES public.organizations(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- RLS Policies
+ALTER TABLE public.content_projects ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.content_topics ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.content_jobs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.content_outputs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.content_assets ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Org isolation select" ON public.content_projects FOR SELECT USING (organization_id = public.get_current_org_id());
+CREATE POLICY "Org isolation insert" ON public.content_projects FOR INSERT WITH CHECK (organization_id = public.get_current_org_id());
+CREATE POLICY "Org isolation update" ON public.content_projects FOR UPDATE USING (organization_id = public.get_current_org_id());
+CREATE POLICY "Org isolation delete" ON public.content_projects FOR DELETE USING (organization_id = public.get_current_org_id());
+
+CREATE POLICY "Org isolation select" ON public.content_topics FOR SELECT USING (organization_id = public.get_current_org_id());
+CREATE POLICY "Org isolation insert" ON public.content_topics FOR INSERT WITH CHECK (organization_id = public.get_current_org_id());
+CREATE POLICY "Org isolation update" ON public.content_topics FOR UPDATE USING (organization_id = public.get_current_org_id());
+CREATE POLICY "Org isolation delete" ON public.content_topics FOR DELETE USING (organization_id = public.get_current_org_id());
+
+CREATE POLICY "Org isolation select" ON public.content_jobs FOR SELECT USING (organization_id = public.get_current_org_id());
+CREATE POLICY "Org isolation insert" ON public.content_jobs FOR INSERT WITH CHECK (organization_id = public.get_current_org_id());
+CREATE POLICY "Org isolation update" ON public.content_jobs FOR UPDATE USING (organization_id = public.get_current_org_id());
+CREATE POLICY "Org isolation delete" ON public.content_jobs FOR DELETE USING (organization_id = public.get_current_org_id());
+
+CREATE POLICY "Org isolation select" ON public.content_outputs FOR SELECT USING (organization_id = public.get_current_org_id());
+CREATE POLICY "Org isolation insert" ON public.content_outputs FOR INSERT WITH CHECK (organization_id = public.get_current_org_id());
+CREATE POLICY "Org isolation update" ON public.content_outputs FOR UPDATE USING (organization_id = public.get_current_org_id());
+CREATE POLICY "Org isolation delete" ON public.content_outputs FOR DELETE USING (organization_id = public.get_current_org_id());
+
+CREATE POLICY "Org isolation select" ON public.content_assets FOR SELECT USING (organization_id = public.get_current_org_id());
+CREATE POLICY "Org isolation insert" ON public.content_assets FOR INSERT WITH CHECK (organization_id = public.get_current_org_id());
+CREATE POLICY "Org isolation update" ON public.content_assets FOR UPDATE USING (organization_id = public.get_current_org_id());
+CREATE POLICY "Org isolation delete" ON public.content_assets FOR DELETE USING (organization_id = public.get_current_org_id());
+-- Image Projects
+CREATE TABLE IF NOT EXISTS public.image_projects (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name TEXT NOT NULL,
+    brand TEXT,
+    organization_id UUID REFERENCES public.organizations(id) ON DELETE CASCADE,
+    created_by UUID REFERENCES public.profiles(id),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Image Templates
+CREATE TABLE IF NOT EXISTS public.image_templates (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name TEXT NOT NULL,
+    brand_colors JSONB,
+    fonts JSONB,
+    logo_placement TEXT,
+    qr_code_placement TEXT,
+    cta_position TEXT,
+    watermark TEXT,
+    organization_id UUID REFERENCES public.organizations(id) ON DELETE CASCADE,
+    created_by UUID REFERENCES public.profiles(id),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Image Styles
+CREATE TABLE IF NOT EXISTS public.image_styles (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name TEXT NOT NULL,
+    prompt_prefix TEXT,
+    negative_prompt TEXT,
+    organization_id UUID REFERENCES public.organizations(id) ON DELETE CASCADE,
+    created_by UUID REFERENCES public.profiles(id),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Image Jobs
+CREATE TABLE IF NOT EXISTS public.image_jobs (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    project_id UUID REFERENCES public.image_projects(id) ON DELETE CASCADE,
+    template_id UUID REFERENCES public.image_templates(id),
+    style_id UUID REFERENCES public.image_styles(id),
+    prompt TEXT NOT NULL,
+    negative_prompt TEXT,
+    category TEXT NOT NULL,
+    aspect_ratio TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    batch_size INT DEFAULT 1,
+    auto_upscale BOOLEAN DEFAULT false,
+    status TEXT DEFAULT 'queued', -- queued, running, completed, failed
+    error_message TEXT,
+    organization_id UUID REFERENCES public.organizations(id) ON DELETE CASCADE,
+    created_by UUID REFERENCES public.profiles(id),
+    started_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Image Assets
+CREATE TABLE IF NOT EXISTS public.image_assets (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    job_id UUID REFERENCES public.image_jobs(id) ON DELETE CASCADE,
+    project_id UUID REFERENCES public.image_projects(id) ON DELETE CASCADE,
+    asset_url TEXT NOT NULL,
+    category TEXT,
+    prompt TEXT,
+    negative_prompt TEXT,
+    provider TEXT,
+    model TEXT,
+    seed BIGINT,
+    resolution TEXT,
+    generation_time_ms INT,
+    cost DECIMAL,
+    organization_id UUID REFERENCES public.organizations(id) ON DELETE CASCADE,
+    created_by UUID REFERENCES public.profiles(id),
+    is_favorite BOOLEAN DEFAULT false,
+    tags JSONB DEFAULT '[]'::jsonb,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Image Variants (Linking multiple variants if needed, though they can just be image_assets tied to same job)
+-- Using image_assets for variants as well.
+
+-- RLS Policies
+ALTER TABLE public.image_projects ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.image_templates ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.image_styles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.image_jobs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.image_assets ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Org isolation select" ON public.image_projects FOR SELECT USING (organization_id = public.get_current_org_id());
+CREATE POLICY "Org isolation insert" ON public.image_projects FOR INSERT WITH CHECK (organization_id = public.get_current_org_id());
+CREATE POLICY "Org isolation update" ON public.image_projects FOR UPDATE USING (organization_id = public.get_current_org_id());
+CREATE POLICY "Org isolation delete" ON public.image_projects FOR DELETE USING (organization_id = public.get_current_org_id());
+
+CREATE POLICY "Org isolation select" ON public.image_templates FOR SELECT USING (organization_id = public.get_current_org_id());
+CREATE POLICY "Org isolation insert" ON public.image_templates FOR INSERT WITH CHECK (organization_id = public.get_current_org_id());
+CREATE POLICY "Org isolation update" ON public.image_templates FOR UPDATE USING (organization_id = public.get_current_org_id());
+CREATE POLICY "Org isolation delete" ON public.image_templates FOR DELETE USING (organization_id = public.get_current_org_id());
+
+CREATE POLICY "Org isolation select" ON public.image_styles FOR SELECT USING (organization_id = public.get_current_org_id());
+CREATE POLICY "Org isolation insert" ON public.image_styles FOR INSERT WITH CHECK (organization_id = public.get_current_org_id());
+CREATE POLICY "Org isolation update" ON public.image_styles FOR UPDATE USING (organization_id = public.get_current_org_id());
+CREATE POLICY "Org isolation delete" ON public.image_styles FOR DELETE USING (organization_id = public.get_current_org_id());
+
+CREATE POLICY "Org isolation select" ON public.image_jobs FOR SELECT USING (organization_id = public.get_current_org_id());
+CREATE POLICY "Org isolation insert" ON public.image_jobs FOR INSERT WITH CHECK (organization_id = public.get_current_org_id());
+CREATE POLICY "Org isolation update" ON public.image_jobs FOR UPDATE USING (organization_id = public.get_current_org_id());
+CREATE POLICY "Org isolation delete" ON public.image_jobs FOR DELETE USING (organization_id = public.get_current_org_id());
+
+CREATE POLICY "Org isolation select" ON public.image_assets FOR SELECT USING (organization_id = public.get_current_org_id());
+CREATE POLICY "Org isolation insert" ON public.image_assets FOR INSERT WITH CHECK (organization_id = public.get_current_org_id());
+CREATE POLICY "Org isolation update" ON public.image_assets FOR UPDATE USING (organization_id = public.get_current_org_id());
+CREATE POLICY "Org isolation delete" ON public.image_assets FOR DELETE USING (organization_id = public.get_current_org_id());
+insert into storage.buckets (id, name, public) values ('image_assets', 'image_assets', true) on conflict do nothing;
+create policy "Public Access" on storage.objects for select using ( bucket_id = 'image_assets' );
+create policy "Auth Insert" on storage.objects for insert with check ( bucket_id = 'image_assets' and auth.role() = 'authenticated' );
+-- Video Projects
+CREATE TABLE IF NOT EXISTS public.video_projects (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name TEXT NOT NULL,
+    brand TEXT,
+    organization_id UUID REFERENCES public.organizations(id) ON DELETE CASCADE,
+    created_by UUID REFERENCES public.profiles(id),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Video Templates
+CREATE TABLE IF NOT EXISTS public.video_templates (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name TEXT NOT NULL,
+    brand_colors JSONB,
+    fonts JSONB,
+    logo_placement TEXT,
+    qr_code_placement TEXT,
+    cta_position TEXT,
+    watermark TEXT,
+    organization_id UUID REFERENCES public.organizations(id) ON DELETE CASCADE,
+    created_by UUID REFERENCES public.profiles(id),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Video Styles
+CREATE TABLE IF NOT EXISTS public.video_styles (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name TEXT NOT NULL,
+    prompt_prefix TEXT,
+    negative_prompt TEXT,
+    organization_id UUID REFERENCES public.organizations(id) ON DELETE CASCADE,
+    created_by UUID REFERENCES public.profiles(id),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Video Jobs
+CREATE TABLE IF NOT EXISTS public.video_jobs (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    project_id UUID REFERENCES public.video_projects(id) ON DELETE CASCADE,
+    template_id UUID REFERENCES public.video_templates(id),
+    style_id UUID REFERENCES public.video_styles(id),
+    prompt TEXT NOT NULL,
+    negative_prompt TEXT,
+    video_type TEXT NOT NULL,
+    aspect_ratio TEXT NOT NULL,
+    duration TEXT,
+    frame_rate TEXT,
+    quality TEXT,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    camera_motion TEXT,
+    transitions TEXT,
+    status TEXT DEFAULT 'queued', -- queued, preparing, generating, rendering, uploading, completed, failed, cancelled
+    error_message TEXT,
+    organization_id UUID REFERENCES public.organizations(id) ON DELETE CASCADE,
+    created_by UUID REFERENCES public.profiles(id),
+    started_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Video Assets
+CREATE TABLE IF NOT EXISTS public.video_assets (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    job_id UUID REFERENCES public.video_jobs(id) ON DELETE CASCADE,
+    project_id UUID REFERENCES public.video_projects(id) ON DELETE CASCADE,
+    asset_url TEXT NOT NULL,
+    thumbnail_url TEXT,
+    video_type TEXT,
+    prompt TEXT,
+    negative_prompt TEXT,
+    provider TEXT,
+    model TEXT,
+    seed BIGINT,
+    resolution TEXT,
+    duration TEXT,
+    generation_time_ms INT,
+    file_size_bytes BIGINT,
+    cost DECIMAL,
+    organization_id UUID REFERENCES public.organizations(id) ON DELETE CASCADE,
+    created_by UUID REFERENCES public.profiles(id),
+    is_favorite BOOLEAN DEFAULT false,
+    tags JSONB DEFAULT '[]'::jsonb,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Video Timelines
+CREATE TABLE IF NOT EXISTS public.video_timelines (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    project_id UUID REFERENCES public.video_projects(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    data JSONB,
+    organization_id UUID REFERENCES public.organizations(id) ON DELETE CASCADE,
+    created_by UUID REFERENCES public.profiles(id),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Video Variants
+CREATE TABLE IF NOT EXISTS public.video_variants (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    asset_id UUID REFERENCES public.video_assets(id) ON DELETE CASCADE,
+    variant_url TEXT NOT NULL,
+    description TEXT,
+    organization_id UUID REFERENCES public.organizations(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- RLS Policies
+ALTER TABLE public.video_projects ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.video_templates ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.video_styles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.video_jobs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.video_assets ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.video_timelines ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.video_variants ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Org isolation select" ON public.video_projects FOR SELECT USING (organization_id = public.get_current_org_id());
+CREATE POLICY "Org isolation insert" ON public.video_projects FOR INSERT WITH CHECK (organization_id = public.get_current_org_id());
+CREATE POLICY "Org isolation update" ON public.video_projects FOR UPDATE USING (organization_id = public.get_current_org_id());
+CREATE POLICY "Org isolation delete" ON public.video_projects FOR DELETE USING (organization_id = public.get_current_org_id());
+
+CREATE POLICY "Org isolation select" ON public.video_templates FOR SELECT USING (organization_id = public.get_current_org_id());
+CREATE POLICY "Org isolation insert" ON public.video_templates FOR INSERT WITH CHECK (organization_id = public.get_current_org_id());
+CREATE POLICY "Org isolation update" ON public.video_templates FOR UPDATE USING (organization_id = public.get_current_org_id());
+CREATE POLICY "Org isolation delete" ON public.video_templates FOR DELETE USING (organization_id = public.get_current_org_id());
+
+CREATE POLICY "Org isolation select" ON public.video_styles FOR SELECT USING (organization_id = public.get_current_org_id());
+CREATE POLICY "Org isolation insert" ON public.video_styles FOR INSERT WITH CHECK (organization_id = public.get_current_org_id());
+CREATE POLICY "Org isolation update" ON public.video_styles FOR UPDATE USING (organization_id = public.get_current_org_id());
+CREATE POLICY "Org isolation delete" ON public.video_styles FOR DELETE USING (organization_id = public.get_current_org_id());
+
+CREATE POLICY "Org isolation select" ON public.video_jobs FOR SELECT USING (organization_id = public.get_current_org_id());
+CREATE POLICY "Org isolation insert" ON public.video_jobs FOR INSERT WITH CHECK (organization_id = public.get_current_org_id());
+CREATE POLICY "Org isolation update" ON public.video_jobs FOR UPDATE USING (organization_id = public.get_current_org_id());
+CREATE POLICY "Org isolation delete" ON public.video_jobs FOR DELETE USING (organization_id = public.get_current_org_id());
+
+CREATE POLICY "Org isolation select" ON public.video_assets FOR SELECT USING (organization_id = public.get_current_org_id());
+CREATE POLICY "Org isolation insert" ON public.video_assets FOR INSERT WITH CHECK (organization_id = public.get_current_org_id());
+CREATE POLICY "Org isolation update" ON public.video_assets FOR UPDATE USING (organization_id = public.get_current_org_id());
+CREATE POLICY "Org isolation delete" ON public.video_assets FOR DELETE USING (organization_id = public.get_current_org_id());
+
+CREATE POLICY "Org isolation select" ON public.video_timelines FOR SELECT USING (organization_id = public.get_current_org_id());
+CREATE POLICY "Org isolation insert" ON public.video_timelines FOR INSERT WITH CHECK (organization_id = public.get_current_org_id());
+CREATE POLICY "Org isolation update" ON public.video_timelines FOR UPDATE USING (organization_id = public.get_current_org_id());
+CREATE POLICY "Org isolation delete" ON public.video_timelines FOR DELETE USING (organization_id = public.get_current_org_id());
+
+CREATE POLICY "Org isolation select" ON public.video_variants FOR SELECT USING (organization_id = public.get_current_org_id());
+CREATE POLICY "Org isolation insert" ON public.video_variants FOR INSERT WITH CHECK (organization_id = public.get_current_org_id());
+CREATE POLICY "Org isolation update" ON public.video_variants FOR UPDATE USING (organization_id = public.get_current_org_id());
+CREATE POLICY "Org isolation delete" ON public.video_variants FOR DELETE USING (organization_id = public.get_current_org_id());
+insert into storage.buckets (id, name, public) values ('video_assets', 'video_assets', true) on conflict do nothing;
+create policy "Public Access" on storage.objects for select using ( bucket_id = 'video_assets' );
+create policy "Auth Insert" on storage.objects for insert with check ( bucket_id = 'video_assets' and auth.role() = 'authenticated' );
+-- Job Queue
+CREATE TABLE IF NOT EXISTS public.job_queue (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    organization_id UUID REFERENCES public.organizations(id) ON DELETE CASCADE,
+    status TEXT NOT NULL DEFAULT 'queued', -- queued, scheduled, preparing, running, paused, retrying, completed, cancelled, failed
+    job_type TEXT NOT NULL, -- content, image, video, voice, publishing, seo, automation, analytics
+    payload JSONB NOT NULL, -- Job parameters (prompt, model, category, etc.)
+    priority TEXT DEFAULT 'medium', -- critical, high, medium, low
+    retry_count INT DEFAULT 0,
+    max_retries INT DEFAULT 3,
+    scheduled_at TIMESTAMPTZ DEFAULT NOW(),
+    started_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Job Dependencies
+CREATE TABLE IF NOT EXISTS public.job_dependencies (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    job_id UUID REFERENCES public.job_queue(id) ON DELETE CASCADE,
+    depends_on_job_id UUID REFERENCES public.job_queue(id) ON DELETE CASCADE
+);
+
+-- Job Logs
+CREATE TABLE IF NOT EXISTS public.job_logs (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    job_id UUID REFERENCES public.job_queue(id) ON DELETE CASCADE,
+    level TEXT NOT NULL, -- info, warn, error
+    message TEXT NOT NULL,
+    metadata JSONB,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- RLS Policies
+ALTER TABLE public.job_queue ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.job_dependencies ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.job_logs ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Org isolation select" ON public.job_queue FOR SELECT USING (organization_id = public.get_current_org_id());
+CREATE POLICY "Org isolation insert" ON public.job_queue FOR INSERT WITH CHECK (organization_id = public.get_current_org_id());
+CREATE POLICY "Org isolation update" ON public.job_queue FOR UPDATE USING (organization_id = public.get_current_org_id());
+
+CREATE POLICY "Org isolation select" ON public.job_dependencies FOR SELECT USING (EXISTS (SELECT 1 FROM public.job_queue WHERE id = job_id AND organization_id = public.get_current_org_id()));
+CREATE POLICY "Org isolation insert" ON public.job_dependencies FOR INSERT WITH CHECK (EXISTS (SELECT 1 FROM public.job_queue WHERE id = job_id AND organization_id = public.get_current_org_id()));
+
+CREATE POLICY "Org isolation select" ON public.job_logs FOR SELECT USING (EXISTS (SELECT 1 FROM public.job_queue WHERE id = job_id AND organization_id = public.get_current_org_id()));
+-- Job Workers
+CREATE TABLE IF NOT EXISTS public.job_workers (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    worker_id TEXT NOT NULL UNIQUE,
+    status TEXT NOT NULL DEFAULT 'idle', -- idle, processing, offline
+    concurrency_limit INT DEFAULT 1,
+    last_heartbeat TIMESTAMPTZ DEFAULT NOW(),
+    organization_id UUID REFERENCES public.organizations(id) ON DELETE CASCADE
+);
+
+-- Job Schedules
+CREATE TABLE IF NOT EXISTS public.job_schedules (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    organization_id UUID REFERENCES public.organizations(id) ON DELETE CASCADE,
+    job_type TEXT NOT NULL,
+    cron_expression TEXT NOT NULL,
+    payload JSONB NOT NULL,
+    next_run TIMESTAMPTZ,
+    is_active BOOLEAN DEFAULT true,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Job Priorities (configuration)
+CREATE TABLE IF NOT EXISTS public.job_priorities (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name TEXT NOT NULL UNIQUE, -- critical, high, medium, low
+    level INT NOT NULL
+);
+
+INSERT INTO public.job_priorities (name, level) VALUES ('critical', 3), ('high', 2), ('medium', 1), ('low', 0) ON CONFLICT DO NOTHING;
+
+-- RLS
+ALTER TABLE public.job_workers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.job_schedules ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.job_priorities ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Org isolation select" ON public.job_workers FOR SELECT USING (organization_id = public.get_current_org_id());
+CREATE POLICY "Org isolation select" ON public.job_schedules FOR SELECT USING (organization_id = public.get_current_org_id());
+-- Industries
+CREATE TABLE IF NOT EXISTS public.industries (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name TEXT NOT NULL UNIQUE,
+    description TEXT,
+    organization_id UUID REFERENCES public.organizations(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Industry Categories
+CREATE TABLE IF NOT EXISTS public.industry_categories (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    industry_id UUID REFERENCES public.industries(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    description TEXT,
+    organization_id UUID REFERENCES public.organizations(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(industry_id, name)
+);
+
+-- Industry Subcategories
+CREATE TABLE IF NOT EXISTS public.industry_subcategories (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    category_id UUID REFERENCES public.industry_categories(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    organization_id UUID REFERENCES public.organizations(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(category_id, name)
+);
+
+-- Industry Products
+CREATE TABLE IF NOT EXISTS public.industry_products (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    subcategory_id UUID REFERENCES public.industry_subcategories(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    description TEXT,
+    organization_id UUID REFERENCES public.organizations(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Buyer Personas
+CREATE TABLE IF NOT EXISTS public.buyer_personas (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    industry_id UUID REFERENCES public.industries(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    description TEXT,
+    organization_id UUID REFERENCES public.organizations(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Supplier Personas
+CREATE TABLE IF NOT EXISTS public.supplier_personas (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    industry_id UUID REFERENCES public.industries(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    description TEXT,
+    organization_id UUID REFERENCES public.organizations(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Apply RLS to all
+ALTER TABLE public.industries ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.industry_categories ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.industry_subcategories ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.industry_products ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.buyer_personas ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.supplier_personas ENABLE ROW LEVEL SECURITY;
+
+-- Policies (Simplified for brevity, following established pattern)
+DO $$
+DECLARE
+    t TEXT;
+    tables TEXT[] := ARRAY['industries', 'industry_categories', 'industry_subcategories', 'industry_products', 'buyer_personas', 'supplier_personas'];
+BEGIN
+    FOREACH t IN ARRAY tables LOOP
+        EXECUTE format('CREATE POLICY "Org isolation select" ON public.%I FOR SELECT USING (organization_id = public.get_current_org_id());', t);
+        EXECUTE format('CREATE POLICY "Org isolation insert" ON public.%I FOR INSERT WITH CHECK (organization_id = public.get_current_org_id());', t);
+        EXECUTE format('CREATE POLICY "Org isolation update" ON public.%I FOR UPDATE USING (organization_id = public.get_current_org_id());', t);
+        EXECUTE format('CREATE POLICY "Org isolation delete" ON public.%I FOR DELETE USING (organization_id = public.get_current_org_id());', t);
+    END LOOP;
+END
+$$;

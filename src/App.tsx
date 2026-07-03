@@ -17,6 +17,10 @@ import { OrganizationPage } from "@/pages/OrganizationPage";
 import { TeamPage } from "@/pages/TeamPage";
 import { AiProvidersPage } from "@/pages/AiProvidersPage";
 import { PromptStudioPage } from "@/pages/PromptStudioPage";
+import { ContentPlannerPage } from "@/pages/ContentPlannerPage";
+import { ImageStudioPage } from "@/pages/ImageStudioPage";
+import { VideoStudioPage } from "@/pages/VideoStudioPage";
+import { JobOrchestratorPage } from "@/pages/JobOrchestratorPage";
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
@@ -52,6 +56,10 @@ export default function App() {
           <Route path="team" element={<TeamPage />} />
           <Route path="ai-providers" element={<AiProvidersPage />} />
           <Route path="prompt-studio" element={<PromptStudioPage />} />
+          <Route path="content-planner" element={<ContentPlannerPage />} />
+          <Route path="image-studio" element={<ImageStudioPage />} />
+          <Route path="video-studio" element={<VideoStudioPage />} />
+          <Route path="job-orchestrator" element={<JobOrchestratorPage />} />
           <Route path="settings" element={<SettingsPage />} />
           <Route path="admin" element={<AdminPage />} />
           <Route path="database" element={<DatabasePage />} />

@@ -1,6 +1,35 @@
 import { supabase } from "@/lib/supabase";
 
-export type AIProviderName = "gemini" | "openai" | "anthropic" | "nvidia" | "minimax" | "deepseek" | "qwen" | "glm";
+export type AIProviderName = "gemini" | "openai" | "anthropic" | "nvidia" | "minimax" | "deepseek" | "qwen" | "glm" | "flux" | "comfyui" | "opensora" | "cogvideox" | "ltxvideo" | "hunyuan";
+
+export interface ImageGenerationParams {
+  prompt: string;
+  negative_prompt?: string;
+  aspect_ratio?: string;
+  batch_size?: number;
+  model?: string;
+}
+
+export interface ImageGenerationResult {
+  base64Data?: string[];
+  latencyMs: number;
+}
+
+export interface VideoGenerationParams {
+  prompt: string;
+  negative_prompt?: string;
+  aspect_ratio?: string;
+  duration?: string;
+  frame_rate?: string;
+  quality?: string;
+  camera_motion?: string;
+  model?: string;
+}
+
+export interface VideoGenerationResult {
+  base64Data?: string;
+  latencyMs: number;
+}
 
 export interface AIProviderConfig {
   id: string;
@@ -24,6 +53,15 @@ export abstract class BaseAIProvider {
   }
   
   abstract generateText(prompt: string): Promise<{ text: string, promptTokens: number, completionTokens: number, totalTokens: number, latencyMs: number }>;
+  
+  async generateImage(params: ImageGenerationParams): Promise<ImageGenerationResult> {
+    throw new Error(`Image generation not implemented for provider: ${this.config.name}`);
+  }
+
+  async generateVideo(params: VideoGenerationParams): Promise<VideoGenerationResult> {
+    throw new Error(`Video generation not implemented for provider: ${this.config.name}`);
+  }
+
   abstract checkHealth(): Promise<boolean>;
   
   get isOperational(): boolean {
@@ -87,6 +125,47 @@ export class GeminiProvider extends BaseAIProvider {
 }
 
 export class OpenAIProvider extends BaseAIProvider {
+  async generateImage(params: ImageGenerationParams): Promise<ImageGenerationResult> {
+    if (!this.config.api_key) throw new Error(`${this.config.name} API key is missing`);
+    
+    const start = Date.now();
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.config.timeout_ms);
+    
+    try {
+      const response = await fetch("https://api.openai.com/v1/images/generations", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${this.config.api_key}`
+        },
+        body: JSON.stringify({
+          model: params.model || "dall-e-3",
+          prompt: params.prompt,
+          n: params.batch_size || 1,
+          size: params.aspect_ratio === "16:9" ? "1792x1024" : params.aspect_ratio === "9:16" ? "1024x1792" : "1024x1024",
+          response_format: "b64_json"
+        }),
+        signal: controller.signal
+      });
+      
+      clearTimeout(timeoutId);
+      const data = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(data.error?.message || "OpenAI Image API Error");
+      }
+      
+      return {
+        base64Data: data.data.map((d: any) => d.b64_json),
+        latencyMs: Date.now() - start
+      };
+    } catch (e: any) {
+      clearTimeout(timeoutId);
+      throw e;
+    }
+  }
+
   async generateText(prompt: string) {
     if (!this.config.api_key) throw new Error(`${this.config.name} API key is missing`);
     
@@ -240,6 +319,46 @@ export class OpenCompatibleProvider extends BaseAIProvider {
   async checkHealth(): Promise<boolean> {
     return true;
   }
+
+  async generateVideo(params: VideoGenerationParams): Promise<VideoGenerationResult> {
+    if (!this.config.api_key) throw new Error(`${this.config.name} API key is missing`);
+    
+    const start = Date.now();
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.config.timeout_ms || 120000);
+    
+    try {
+      const response = await fetch(`${this.baseUrl}/video/generations`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${this.config.api_key}`
+        },
+        body: JSON.stringify({
+          model: params.model || "video-model",
+          prompt: params.prompt,
+          negative_prompt: params.negative_prompt,
+          aspect_ratio: params.aspect_ratio,
+        }),
+        signal: controller.signal
+      });
+      
+      clearTimeout(timeoutId);
+      const data = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(data.error?.message || `${this.config.name} Video API Error`);
+      }
+      
+      return {
+        base64Data: data.video_base64 || data.data?.[0]?.b64_json || "",
+        latencyMs: Date.now() - start
+      };
+    } catch (e: any) {
+      clearTimeout(timeoutId);
+      throw e;
+    }
+  }
 }
 
 export class AIManagerService {
@@ -388,5 +507,136 @@ export class AIManagerService {
     }
     
     throw new Error("All AI providers failed to generate a response");
+  }
+
+  async generateImage(params: ImageGenerationParams & { providerId?: string }, userId: string): Promise<string[]> {
+    const { data: profile } = await supabase.from('profiles').select('organization_id').eq('id', userId).single();
+    if (!profile?.organization_id) throw new Error("User has no organization context");
+    
+    const orgId = profile.organization_id;
+    const providers = await this.getProviders(orgId);
+    
+    if (providers.length === 0) throw new Error("No active AI providers available");
+    
+    if (params.providerId) {
+      providers.sort((a, b) => {
+        if (a.providerConfig.provider_id === params.providerId) return -1;
+        if (b.providerConfig.provider_id === params.providerId) return 1;
+        return 0;
+      });
+    }
+
+    for (const provider of providers) {
+      const config = provider.providerConfig;
+      try {
+        let attempts = 0;
+        let success = false;
+        let response;
+        
+        while (attempts <= config.retry_count && !success) {
+          try {
+            response = await provider.generateImage(params);
+            success = true;
+          } catch (retryErr: any) {
+            if (retryErr.message?.includes("not implemented")) throw retryErr;
+            attempts++;
+            if (attempts > config.retry_count) throw retryErr;
+            await new Promise(r => setTimeout(r, 1000 * attempts));
+          }
+        }
+        
+        if (success && response && response.base64Data) {
+          const uploadedUrls: string[] = [];
+          for (let i = 0; i < response.base64Data.length; i++) {
+             const base64Str = response.base64Data[i];
+             const res = await fetch(`data:image/png;base64,${base64Str}`);
+             const blob = await res.blob();
+             const fileName = `${orgId}/${Date.now()}_${i}.png`;
+             
+             const { error: uploadError } = await supabase.storage
+                .from('image_assets')
+                .upload(fileName, blob, { contentType: 'image/png' });
+                
+             if (uploadError) {
+                 console.error("Failed to upload image:", uploadError);
+                 continue;
+             }
+             
+             const { data: publicUrlData } = supabase.storage
+                .from('image_assets')
+                .getPublicUrl(fileName);
+                
+             uploadedUrls.push(publicUrlData.publicUrl);
+          }
+          if (uploadedUrls.length > 0) return uploadedUrls;
+        }
+      } catch (error: any) {
+        console.warn(`Provider ${config.name} failed image generation...`, error);
+      }
+    }
+    throw new Error("All AI providers failed to generate an image");
+  }
+
+  async generateVideo(params: VideoGenerationParams & { providerId?: string }, userId: string): Promise<string> {
+    const { data: profile } = await supabase.from('profiles').select('organization_id').eq('id', userId).single();
+    if (!profile?.organization_id) throw new Error("User has no organization context");
+    
+    const orgId = profile.organization_id;
+    const providers = await this.getProviders(orgId);
+    
+    if (providers.length === 0) throw new Error("No active AI providers available");
+    
+    if (params.providerId) {
+      providers.sort((a, b) => {
+        if (a.providerConfig.provider_id === params.providerId) return -1;
+        if (b.providerConfig.provider_id === params.providerId) return 1;
+        return 0;
+      });
+    }
+
+    for (const provider of providers) {
+      const config = provider.providerConfig;
+      try {
+        let attempts = 0;
+        let success = false;
+        let response;
+        
+        while (attempts <= config.retry_count && !success) {
+          try {
+            response = await provider.generateVideo(params);
+            success = true;
+          } catch (retryErr: any) {
+            if (retryErr.message?.includes("not implemented")) throw retryErr;
+            attempts++;
+            if (attempts > config.retry_count) throw retryErr;
+            await new Promise(r => setTimeout(r, 1000 * attempts));
+          }
+        }
+        
+        if (success && response && response.base64Data) {
+           const res = await fetch(`data:video/mp4;base64,${response.base64Data}`);
+           const blob = await res.blob();
+           const fileName = `${orgId}/${Date.now()}.mp4`;
+           
+           const { error: uploadError } = await supabase.storage
+              .from('video_assets')
+              .upload(fileName, blob, { contentType: 'video/mp4' });
+              
+           if (uploadError) {
+               console.error("Failed to upload video:", uploadError);
+               continue;
+           }
+           
+           const { data: publicUrlData } = supabase.storage
+              .from('video_assets')
+              .getPublicUrl(fileName);
+              
+           return publicUrlData.publicUrl;
+        }
+      } catch (error: any) {
+        console.warn(`Provider ${config.name} failed video generation...`, error);
+      }
+    }
+    throw new Error("All AI providers failed to generate a video");
   }
 }
