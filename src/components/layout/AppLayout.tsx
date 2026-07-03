@@ -85,6 +85,11 @@ const sidebarNavItems = [
     icon: Activity,
   },
   {
+    title: "Context Engine",
+    href: "/context-profiles",
+    icon: LayoutDashboard,
+  },
+  {
     title: "Admin",
     href: "/admin",
     icon: Shield,
