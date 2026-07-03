@@ -1,3 +1,4 @@
+import "dotenv/config";
 import express from "express";
 import path from "path";
 import { createServer as createViteServer } from "vite";
@@ -22,7 +23,9 @@ async function startServer() {
       'SUPABASE_KEY', 
       'SUPABASE_ANON_KEY',
       'DATABASE_URL',
-      'GEMINI_API_KEY'
+      'GEMINI_API_KEY',
+      'OPENAI_API_KEY',
+      'STRIPE_SECRET_KEY'
     ];
     
     const diagnostics = keysToCheck.reduce((acc: any, key) => {

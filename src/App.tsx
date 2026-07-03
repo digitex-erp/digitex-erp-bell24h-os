@@ -36,8 +36,11 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
   const isLoading = useAuthStore((state) => state.isLoading);
   
+  console.log("[Runtime] ProtectedRoute: State", { isAuthenticated, isLoading });
+  
   if (isLoading) {
-    return <div className="flex h-screen items-center justify-center">Loading...</div>;
+    console.log("[Runtime] ProtectedRoute: Still loading...");
+    return <div className="flex h-screen items-center justify-center text-foreground bg-background">Loading...</div>;
   }
   
   if (!isAuthenticated) {
@@ -47,13 +50,18 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+console.log("[Runtime] App component: Module loaded");
+
 export default function App() {
+  console.log("[Runtime] App component: Rendering");
   // Initialize auth listener
   useAuth();
   
   return (
     <BrowserRouter>
       <Routes>
+        <Route path="/runtime-check" element={<div className="p-20 text-4xl font-bold">Bell24h-OS Runtime OK</div>} />
+        <Route path="/runtime-error" element={<div ref={() => { throw new Error("Explicit Runtime Debug Error"); }}>Error Test</div>} />
         <Route path="/auth" element={<AuthPage />} />
         <Route path="/auth/login" element={<AuthPage />} />
         <Route path="/auth/signup" element={<AuthPage />} />

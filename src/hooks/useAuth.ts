@@ -4,11 +4,14 @@ import { useEffect } from 'react';
 import type { User } from '@/store/useAuthStore';
 
 export function useAuth() {
+  console.log("[Runtime] useAuth hook: Executing");
   const { user, isAuthenticated, isLoading, login, logout, setLoading } = useAuthStore();
 
   useEffect(() => {
+    console.log("[Runtime] useAuth effect: Running initial session check");
     // Initial session check
     supabase.auth.getSession().then(({ data: { session }, error }) => {
+      console.log("[Runtime] useAuth: getSession result", { hasSession: !!session, error });
       if (session?.user) {
         login({
           id: session.user.id,
