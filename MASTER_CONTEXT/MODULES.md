@@ -14,3 +14,4 @@
 - Enterprise SEO Intelligence Platform
 - Enterprise Campaign Intelligence Platform
 - Enterprise Media Composer Platform
+- Enterprise Publishing Center Platform

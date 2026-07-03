@@ -6,3 +6,4 @@
 - `SeoIntelligenceService.getOpportunities(...)`: Standardized method for SEO opportunity retrieval.
 - `CampaignManagerService.createCampaign(...)`: Standardized method for campaign creation.
 - `MediaComposerService.createPackage(...)`: Standardized method for media package creation.
+- `PublishingCenterService.enqueuePublishingTask(...)`: Standardized method for publishing task submission.

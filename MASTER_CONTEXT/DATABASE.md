@@ -11,3 +11,4 @@ Bell24h-OS utilizes a normalized PostgreSQL database, managed via Supabase.
 - **SEO Intelligence**: Keywords, opportunities, and search intent.
 - **Campaign Intelligence**: Multi-channel campaign management and orchestration.
 - **Media Composer**: Asset package orchestration, compositions, and exports.
+- **Publishing Center**: Accounts, channels, queue, history, and results.

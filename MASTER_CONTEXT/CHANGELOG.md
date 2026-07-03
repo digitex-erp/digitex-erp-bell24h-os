@@ -5,3 +5,4 @@
 - 2026-07-03: Enterprise SEO Intelligence Platform (Market Opportunity, Search Intent, Keyword Clustering, Topic Recommendation, Search Console).
 - 2026-07-03: Enterprise Campaign Intelligence Platform (Campaign Builder, Campaign Assets).
 - 2026-07-03: Enterprise Media Composer Platform (Package Orchestration, Compositions, Exports).
+- 2026-07-03: Enterprise Publishing Center Platform (Publishing Engine, Scheduler, Queue).
