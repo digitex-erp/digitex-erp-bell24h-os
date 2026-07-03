@@ -42,7 +42,7 @@ export class GeminiProvider extends BaseAIProvider {
     }
     // Placeholder implementation for Gemini using the abstraction layer
     console.log(`[Gemini] Generating text with model ${this.config.model}`);
-    return Promise.resolve(\`[Gemini] Mock response for: \${prompt}\`);
+    return Promise.resolve(`[Gemini] Mock response for: ${prompt}`);
   }
 
   async checkHealth(): Promise<boolean> {
@@ -93,7 +93,7 @@ export class AIManager {
       try {
         return await provider.generateText(prompt);
       } catch (error) {
-        console.warn(\`Provider \${(provider as any).config.name} failed, trying next...\`, error);
+        console.warn(`Provider ${(provider as any).config.name} failed, trying next...`, error);
         // If failover is disabled, throw immediately
         // @ts-ignore
         if (!provider.config.failover) {

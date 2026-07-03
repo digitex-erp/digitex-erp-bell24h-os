@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 
-interface User {
+export interface User {
   id: string;
   email: string;
   name: string;
@@ -13,19 +13,15 @@ interface AuthState {
   isLoading: boolean;
   login: (user: User) => void;
   logout: () => void;
+  setLoading: (loading: boolean) => void;
 }
 
 export const useAuthStore = create<AuthState>((set) => ({
-  // Mock initial state for development
-  user: {
-    id: 'usr_1',
-    email: 'john.doe@example.com',
-    name: 'John Doe',
-    role: 'ADMIN',
-  },
-  isAuthenticated: true,
-  isLoading: false,
+  user: null,
+  isAuthenticated: false,
+  isLoading: true,
   
-  login: (user) => set({ user, isAuthenticated: true }),
-  logout: () => set({ user: null, isAuthenticated: false }),
+  login: (user) => set({ user, isAuthenticated: true, isLoading: false }),
+  logout: () => set({ user: null, isAuthenticated: false, isLoading: false }),
+  setLoading: (isLoading) => set({ isLoading }),
 }));

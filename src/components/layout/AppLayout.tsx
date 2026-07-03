@@ -13,7 +13,8 @@ import {
   Check,
   ChevronsUpDown,
   LogOut,
-  User
+  User,
+  Building
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -28,12 +29,18 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useState, useEffect } from "react";
 import { useAuthStore } from "@/store/useAuthStore";
+import { supabase } from "@/lib/supabase";
 
 const sidebarNavItems = [
   {
     title: "Dashboard",
-    href: "/",
+    href: "/dashboard",
     icon: LayoutDashboard,
+  },
+  {
+    title: "Organization",
+    href: "/organization",
+    icon: Building,
   },
   {
     title: "Admin",
@@ -57,6 +64,7 @@ export function AppLayout() {
   const navigate = useNavigate();
   const [theme, setTheme] = useState<"light" | "dark">("dark");
   const { user, logout } = useAuthStore();
+  const [org, setOrg] = useState<any>(null);
 
   useEffect(() => {
     const root = window.document.documentElement;
@@ -64,9 +72,22 @@ export function AppLayout() {
     root.classList.add(theme);
   }, [theme]);
 
+  useEffect(() => {
+    async function fetchOrg() {
+      if (!user) return;
+      const { data: profile } = await supabase.from('profiles').select('organization_id').eq('id', user.id).single();
+      if (profile?.organization_id) {
+        const { data: orgData } = await supabase.from('organizations').select('id, name').eq('id', profile.organization_id).single();
+        if (orgData) setOrg(orgData);
+      }
+    }
+    fetchOrg();
+  }, [user]);
+
   const toggleTheme = () => setTheme(theme === "dark" ? "light" : "dark");
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
     logout();
     navigate("/auth");
   };
@@ -91,9 +112,9 @@ export function AppLayout() {
               <Button variant="outline" className="w-full justify-between px-3">
                 <div className="flex items-center gap-2">
                   <Avatar className="h-5 w-5">
-                    <AvatarFallback>AC</AvatarFallback>
+                    <AvatarFallback>{org?.name ? org.name.substring(0,2).toUpperCase() : 'NO'}</AvatarFallback>
                   </Avatar>
-                  <span className="truncate">Acme Corp</span>
+                  <span className="truncate">{org?.name || "No Organization"}</span>
                 </div>
                 <ChevronsUpDown className="h-4 w-4 shrink-0 opacity-50" />
               </Button>
@@ -104,18 +125,10 @@ export function AppLayout() {
               <DropdownMenuItem>
                 <div className="flex items-center gap-2 w-full">
                   <Avatar className="h-5 w-5">
-                    <AvatarFallback>AC</AvatarFallback>
+                    <AvatarFallback>{org?.name ? org.name.substring(0,2).toUpperCase() : 'NO'}</AvatarFallback>
                   </Avatar>
-                  <span className="flex-1 truncate">Acme Corp</span>
+                  <span className="flex-1 truncate">{org?.name || "No Organization"}</span>
                   <Check className="h-4 w-4 opacity-50" />
-                </div>
-              </DropdownMenuItem>
-              <DropdownMenuItem>
-                <div className="flex items-center gap-2 w-full">
-                  <Avatar className="h-5 w-5">
-                    <AvatarFallback>GL</AvatarFallback>
-                  </Avatar>
-                  <span className="flex-1 truncate">Globex Inc</span>
                 </div>
               </DropdownMenuItem>
               <DropdownMenuSeparator />

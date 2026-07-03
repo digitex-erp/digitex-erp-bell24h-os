@@ -1,31 +1,67 @@
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardFooter } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Command } from "lucide-react";
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate, Link, Navigate } from "react-router-dom";
+import { supabase } from "@/lib/supabase";
 import { useAuthStore } from "@/store/useAuthStore";
 
 export function AuthPage() {
   const navigate = useNavigate();
-  const login = useAuthStore((state) => state.login);
+  const location = useLocation();
+  const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
+  const isLoadingAuth = useAuthStore((state) => state.isLoading);
   const [isLoading, setIsLoading] = useState(false);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
 
-  const handleLogin = (e: React.FormEvent) => {
+  if (!isLoadingAuth && isAuthenticated) {
+    return <Navigate to="/dashboard" replace />;
+  }
+
+  const mode = location.pathname.includes("signup")
+    ? "signup"
+    : location.pathname.includes("forgot-password")
+    ? "forgot-password"
+    : "login";
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
-    // Mock login delay
-    setTimeout(() => {
-      login({
-        id: "usr_mock",
-        email: "demo@example.com",
-        name: "Demo User",
-        role: "ADMIN"
-      });
+    setError(null);
+    setSuccess(null);
+    
+    try {
+      if (mode === "login") {
+        const { error } = await supabase.auth.signInWithPassword({
+          email,
+          password,
+        });
+        if (error) throw error;
+        navigate("/dashboard");
+      } else if (mode === "signup") {
+        const { error } = await supabase.auth.signUp({
+          email,
+          password,
+        });
+        if (error) throw error;
+        setSuccess("Check your email to verify your account.");
+      } else if (mode === "forgot-password") {
+        const { error } = await supabase.auth.resetPasswordForEmail(email, {
+          redirectTo: `${window.location.origin}/auth/update-password`,
+        });
+        if (error) throw error;
+        setSuccess("Password reset email sent.");
+      }
+    } catch (err: any) {
+      setError(err.message || "An error occurred");
+    } finally {
       setIsLoading(false);
-      navigate("/");
-    }, 1000);
+    }
   };
 
   return (
@@ -37,35 +73,84 @@ export function AuthPage() {
           </div>
           <h1 className="text-2xl font-bold tracking-tight">Bell24h-OS</h1>
           <p className="text-sm text-muted-foreground">
-            Enter your credentials to access the platform
+            {mode === "login" && "Enter your credentials to access the platform"}
+            {mode === "signup" && "Create a new account"}
+            {mode === "forgot-password" && "Reset your password"}
           </p>
         </div>
         <Card>
-          <form onSubmit={handleLogin}>
+          <form onSubmit={handleSubmit}>
             <CardContent className="space-y-4 pt-6">
+              {error && (
+                <div className="p-3 text-sm rounded-md bg-destructive/10 text-destructive border border-destructive/20">
+                  {error}
+                </div>
+              )}
+              {success && (
+                <div className="p-3 text-sm rounded-md bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
+                  {success}
+                </div>
+              )}
+              
               <div className="space-y-2">
                 <Label htmlFor="email">Email</Label>
-                <Input id="email" type="email" placeholder="name@example.com" required />
+                <Input 
+                  id="email" 
+                  type="email" 
+                  placeholder="name@example.com" 
+                  required 
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                />
               </div>
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <Label htmlFor="password">Password</Label>
-                  <a href="#" className="text-xs text-primary hover:underline">
-                    Forgot password?
-                  </a>
+              
+              {mode !== "forgot-password" && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="password">Password</Label>
+                    {mode === "login" && (
+                      <Link to="/auth/forgot-password" className="text-xs text-primary hover:underline">
+                        Forgot password?
+                      </Link>
+                    )}
+                  </div>
+                  <Input 
+                    id="password" 
+                    type="password" 
+                    required 
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                  />
                 </div>
-                <Input id="password" type="password" required />
-              </div>
+              )}
             </CardContent>
-            <CardFooter>
+            <CardFooter className="flex-col gap-4">
               <Button className="w-full" type="submit" disabled={isLoading}>
-                {isLoading ? "Signing in..." : "Sign in"}
+                {isLoading ? "Processing..." : mode === "login" ? "Sign in" : mode === "signup" ? "Create account" : "Send reset link"}
               </Button>
+              
+              <div className="text-center text-sm text-muted-foreground w-full">
+                {mode === "login" ? (
+                  <>
+                    Don't have an account?{" "}
+                    <Link to="/auth/signup" className="text-primary hover:underline">
+                      Sign up
+                    </Link>
+                  </>
+                ) : (
+                  <>
+                    Back to{" "}
+                    <Link to="/auth/login" className="text-primary hover:underline">
+                      Sign in
+                    </Link>
+                  </>
+                )}
+              </div>
             </CardFooter>
           </form>
         </Card>
         <div className="text-center text-sm text-muted-foreground">
-          By signing in, you agree to our{" "}
+          By continuing, you agree to our{" "}
           <a href="#" className="underline hover:text-primary">
             Terms of Service
           </a>{" "}
