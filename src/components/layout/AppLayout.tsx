@@ -15,7 +15,9 @@ import {
   LogOut,
   User,
   Building,
-  Shield
+  Shield,
+  BrainCircuit,
+  TerminalSquare
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -47,6 +49,16 @@ const sidebarNavItems = [
     title: "Team",
     href: "/team",
     icon: Users,
+  },
+  {
+    title: "AI Providers",
+    href: "/ai-providers",
+    icon: BrainCircuit,
+  },
+  {
+    title: "Prompt Studio",
+    href: "/prompt-studio",
+    icon: TerminalSquare,
   },
   {
     title: "Admin",
