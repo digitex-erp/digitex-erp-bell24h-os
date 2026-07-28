@@ -17,11 +17,15 @@ import { createServer as createViteServer } from "vite";
 import pg from "pg";
 const { Pool } = pg;
 import fs from "fs";
-import { GoogleGenAI, Type } from "@google/genai";
+import * as aiRouter from "./server/ai/ProviderRouter";
+import { requireAuth, type AuthedRequest } from "./server/middleware/requireAuth";
+import { rateLimit } from "./server/middleware/rateLimit";
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  // Configurable so the server can be run alongside other local services and so
+  // Review Gate verification can bind a free port. Default is unchanged.
+  const PORT = Number(process.env.PORT ?? 3000);
 
   app.use(express.json());
 
@@ -83,19 +87,8 @@ async function startServer() {
     return pool;
   };
 
-  const getAi = () => {
-    if (!process.env.GEMINI_API_KEY) {
-      throw new Error("GEMINI_API_KEY is not defined in environment variables.");
-    }
-    return new GoogleGenAI({
-      apiKey: process.env.GEMINI_API_KEY,
-      httpOptions: {
-        headers: {
-          'User-Agent': 'aistudio-build',
-        }
-      }
-    });
-  };
+  // AI provider access is owned by server/ai/* — see ProviderManager for the
+  // credential contract. Route handlers must not construct provider clients.
 
   app.get("/api/check-table", async (req, res) => {
     try {
@@ -220,66 +213,94 @@ async function startServer() {
     }
   });
 
-  app.post("/api/vault/ai-summary", async (req, res) => {
-    const { content, type } = req.body;
+  // AI endpoints: authenticated + organization-scoped + rate limited + budgeted.
+  // Provider execution goes through server/ai/*, never the browser AiProviderService.
+  const aiRateLimit = rateLimit({
+    name: "vault-ai",
+    limit: Number(process.env.AI_RATE_LIMIT_PER_MINUTE ?? 10),
+    windowMs: 60_000,
+  });
+
+  const aiErrorStatus = (code: string | undefined) => {
+    if (code === "ai_budget_exceeded") return 429;
+    if (code === "provider_credentials_unavailable") return 503;
+    return 500;
+  };
+
+  app.post("/api/vault/ai-summary", requireAuth, aiRateLimit, async (req, res) => {
+    const { auth, requestId } = req as AuthedRequest;
+    const { content, type } = req.body ?? {};
+
+    if (typeof content !== "string" || content.trim().length === 0) {
+      return res.status(400).json({ error: "invalid_input", detail: "content is required" });
+    }
+    if (typeof type !== "string" || type.trim().length === 0) {
+      return res.status(400).json({ error: "invalid_input", detail: "type is required" });
+    }
+
     try {
-      const ai = getAi();
-      const prompt = `You are the AI Founder Mentor for ICECRAFT. 
+      const data = await aiRouter.generateJson<{ summary: string; recommendations: string[] }>(
+        {
+          userId: auth!.userId,
+          organizationId: auth!.organizationId,
+          requestId: requestId!,
+          action: "ai.vault.summary",
+        },
+        {
+          prompt: `You are the AI Founder Mentor for ICECRAFT.
         Analyze the following ${type} content and provide a concise summary (max 3 sentences) and 3 strategic recommendations.
-        
-        Content: ${content}`;
 
-      const result = await ai.models.generateContent({
-        model: "gemini-3.6-flash",
-        contents: prompt,
-        config: {
-          responseMimeType: "application/json",
+        Content: ${content}`,
           responseSchema: {
-            type: Type.OBJECT,
+            type: aiRouter.SchemaType.OBJECT,
             properties: {
-              summary: { type: Type.STRING },
+              summary: { type: aiRouter.SchemaType.STRING },
               recommendations: {
-                type: Type.ARRAY,
-                items: { type: Type.STRING }
-              }
+                type: aiRouter.SchemaType.ARRAY,
+                items: { type: aiRouter.SchemaType.STRING },
+              },
             },
-            required: ["summary", "recommendations"]
-          }
-        }
-      });
-
-      const text = result.text || "{}";
-      try {
-        res.json(JSON.parse(text));
-      } catch (parseErr: any) {
-        console.error("[Runtime] AI Summary parse error:", text);
-        res.status(500).json({ error: "Failed to parse AI response", raw: text });
-      }
+            required: ["summary", "recommendations"],
+          },
+        },
+      );
+      res.json(data);
     } catch (err: any) {
       console.error("[Runtime] AI Summary error:", err.message);
-      res.status(500).json({ error: err.message });
+      res.status(aiErrorStatus(err?.code)).json({ error: err?.code ?? "ai_request_failed", requestId });
     }
   });
 
-  app.post("/api/vault/mentor-advice", async (req, res) => {
-    const { currentPhase, focus } = req.body;
+  app.post("/api/vault/mentor-advice", requireAuth, aiRateLimit, async (req, res) => {
+    const { auth, requestId } = req as AuthedRequest;
+    const { currentPhase, focus } = req.body ?? {};
+
+    if (typeof currentPhase !== "string" || typeof focus !== "string") {
+      return res
+        .status(400)
+        .json({ error: "invalid_input", detail: "currentPhase and focus are required" });
+    }
+
     try {
-      const ai = getAi();
-      const prompt = `You are the AI Founder Mentor for ICECRAFT. 
+      const advice = await aiRouter.generateText(
+        {
+          userId: auth!.userId,
+          organizationId: auth!.organizationId,
+          requestId: requestId!,
+          action: "ai.vault.mentorAdvice",
+        },
+        {
+          prompt: `You are the AI Founder Mentor for ICECRAFT.
         Current Business Phase: ${currentPhase}
         Founder's Current Focus: ${focus}
-        
-        Provide one short, high-impact strategic advice for today. Keep it under 40 words.`;
 
-      const result = await ai.models.generateContent({
-        model: "gemini-3.6-flash",
-        contents: prompt,
-      });
-
-      res.json({ advice: result.text });
+        Provide one short, high-impact strategic advice for today. Keep it under 40 words.`,
+        },
+      );
+      res.json({ advice });
     } catch (err: any) {
       console.error("[Runtime] Mentor advice error:", err.message);
-      res.status(500).json({ error: err.message });
+      res.status(aiErrorStatus(err?.code)).json({ error: err?.code ?? "ai_request_failed", requestId });
     }
   });
 

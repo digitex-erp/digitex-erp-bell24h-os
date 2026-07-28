@@ -155,9 +155,11 @@ export function SystemDiagnosticsPage() {
     }
 
     // 5. Realtime Health
+    // No realtime subscription check is performed. Reporting an unverified 'pass'
+    // would fabricate a result, so this is declared unimplemented instead.
     newDiagnostics.realtime = {
-      status: 'pass',
-      details: 'Realtime subscription channel established'
+      status: 'not_implemented',
+      details: 'No realtime check performed'
     };
 
     // 6. Session Status
@@ -203,6 +205,7 @@ export function SystemDiagnosticsPage() {
     if (status === 'pass') return <CheckCircle className="h-5 w-5 text-green-500" />;
     if (status === 'fail') return <XCircle className="h-5 w-5 text-destructive" />;
     if (status === 'warn') return <AlertTriangle className="h-5 w-5 text-amber-500" />;
+    if (status === 'not_implemented') return <AlertTriangle className="h-5 w-5 text-muted-foreground" />;
     return <RefreshCw className="h-5 w-5 text-muted-foreground animate-spin" />;
   };
 

@@ -1,3 +1,17 @@
+/**
+ * LEGACY — DO NOT USE FOR NEW SERVER ENDPOINTS.
+ * Server-side AI calls must use `server/ai/*` (ProviderRouter), which resolves
+ * provider credentials from the server environment.
+ *
+ * This module runs in the BROWSER. It loads provider rows — including `api_key` —
+ * from the tenant-readable `public.ai_providers` table via `select('*')`, which
+ * places provider credentials in client memory for any authenticated organization
+ * member. That contradicts SECURITY_BASELINE.md ("Never store provider keys in
+ * ordinary tenant-readable records") and is tracked as Critical Security Debt:
+ * provider keys require migration to server-side secret storage plus credential
+ * rotation. Existing UI consumers are unchanged pending that dedicated sprint.
+ */
+
 import { supabase } from "@/lib/supabase";
 
 export type AIProviderName = "gemini" | "openai" | "anthropic" | "nvidia" | "minimax" | "deepseek" | "qwen" | "glm" | "flux" | "comfyui" | "opensora" | "cogvideox" | "ltxvideo" | "hunyuan";

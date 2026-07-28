@@ -1,5 +1,6 @@
 import { useAuthStore, AUTH_BYPASS } from '@/store/useAuthStore';
 import { supabase } from '@/lib/supabase';
+import { AuthService } from '@/modules/auth/AuthService';
 import { useEffect } from 'react';
 import type { User } from '@/store/useAuthStore';
 
@@ -16,20 +17,20 @@ export function useAuth() {
     }
 
     supabase.auth.getSession()
-      .then(({ data: { session }, error }) => {
+      .then(async ({ data: { session }, error }) => {
         if (error) {
           console.error("Auth Session Error:", error);
           logout();
           setLoading(false);
           return;
         }
-        
+
         if (session?.user) {
           login({
             id: session.user.id,
             email: session.user.email || '',
             name: session.user.user_metadata?.name || 'User',
-            role: 'ADMIN', // Hardcoded role for now
+            role: await AuthService.resolveRole(session.user.id),
           });
         } else {
           logout();
@@ -46,11 +47,14 @@ export function useAuth() {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       (event, session) => {
         if (session?.user) {
-          login({
-            id: session.user.id,
-            email: session.user.email || '',
-            name: session.user.user_metadata?.name || 'User',
-            role: 'ADMIN',
+          const sessionUser = session.user;
+          AuthService.resolveRole(sessionUser.id).then((role) => {
+            login({
+              id: sessionUser.id,
+              email: sessionUser.email || '',
+              name: sessionUser.user_metadata?.name || 'User',
+              role,
+            });
           });
         } else {
           logout();
