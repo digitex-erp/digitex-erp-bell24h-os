@@ -31,15 +31,13 @@ import { AutomationDashboardPage } from "@/pages/AutomationDashboardPage";
 import { AutomationBuilderPage } from "@/pages/AutomationBuilderPage";
 import { PerformanceDashboardPage } from "@/pages/PerformanceDashboardPage";
 import { SystemDiagnosticsPage } from "@/pages/SystemDiagnosticsPage";
+import { KnowledgeVaultPage } from "@/pages/KnowledgeVaultPage";
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
   const isLoading = useAuthStore((state) => state.isLoading);
   
-  console.log("[Runtime] ProtectedRoute: State", { isAuthenticated, isLoading });
-  
   if (isLoading) {
-    console.log("[Runtime] ProtectedRoute: Still loading...");
     return <div className="flex h-screen items-center justify-center text-foreground bg-background">Loading...</div>;
   }
   
@@ -50,27 +48,35 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
-console.log("[Runtime] App component: Module loaded");
+function AuthRedirect({ children }: { children: React.ReactNode }) {
+  const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
+  
+  if (isAuthenticated) {
+    return <Navigate to="/dashboard" replace />;
+  }
+
+  return <>{children}</>;
+}
 
 export default function App() {
-  console.log("[Runtime] App component: Rendering");
   // Initialize auth listener
   useAuth();
   
   return (
     <BrowserRouter>
       <Routes>
-        <Route path="/runtime-check" element={<div className="p-20 text-4xl font-bold">Bell24h-OS Runtime OK</div>} />
-        <Route path="/runtime-error" element={<div ref={() => { throw new Error("Explicit Runtime Debug Error"); }}>Error Test</div>} />
-        <Route path="/auth" element={<AuthPage />} />
-        <Route path="/auth/login" element={<AuthPage />} />
-        <Route path="/auth/signup" element={<AuthPage />} />
-        <Route path="/auth/forgot-password" element={<AuthPage />} />
+        {/* TEMPORARY DEVELOPMENT AUTH BYPASS: Redirecting auth routes to dashboard */}
+        <Route path="/auth" element={<AuthRedirect><AuthPage /></AuthRedirect>} />
+        <Route path="/auth/login" element={<AuthRedirect><AuthPage /></AuthRedirect>} />
+        <Route path="/auth/signup" element={<AuthRedirect><AuthPage /></AuthRedirect>} />
+        <Route path="/auth/forgot-password" element={<AuthRedirect><AuthPage /></AuthRedirect>} />
+        <Route path="/auth/update-password" element={<AuthRedirect><AuthPage /></AuthRedirect>} />
         <Route path="/system/diagnostics" element={<SystemDiagnosticsPage />} />
         
         <Route path="/" element={<ProtectedRoute><AppLayout /></ProtectedRoute>}>
           <Route index element={<Navigate to="/dashboard" replace />} />
           <Route path="dashboard" element={<DashboardPage />} />
+          <Route path="knowledge-vault" element={<KnowledgeVaultPage />} />
           <Route path="organization" element={<OrganizationPage />} />
           <Route path="team" element={<TeamPage />} />
           <Route path="ai-providers" element={<AiProvidersPage />} />

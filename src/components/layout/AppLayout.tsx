@@ -40,6 +40,11 @@ import { supabase } from "@/lib/supabase";
 
 const sidebarNavItems = [
   {
+    title: "Knowledge Vault",
+    href: "/knowledge-vault",
+    icon: Database,
+  },
+  {
     title: "Dashboard",
     href: "/dashboard",
     icon: LayoutDashboard,

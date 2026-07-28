@@ -1885,3 +1885,141 @@ BEGIN
     END LOOP;
 END
 $$;
+
+-- Knowledge Vault Tables
+
+-- 1. Vault Documents (Vision, Mission, etc.)
+CREATE TABLE IF NOT EXISTS vault_documents (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  title TEXT NOT NULL,
+  category TEXT NOT NULL,
+  content TEXT NOT NULL,
+  tags TEXT[] DEFAULT '{}',
+  version INTEGER DEFAULT 1,
+  last_updated TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 2. R&D Library
+CREATE TABLE IF NOT EXISTS rd_library (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  title TEXT NOT NULL,
+  category TEXT NOT NULL,
+  content TEXT NOT NULL,
+  status TEXT DEFAULT 'Draft',
+  tags TEXT[] DEFAULT '{}',
+  attachments TEXT[] DEFAULT '{}',
+  photos TEXT[] DEFAULT '{}',
+  videos TEXT[] DEFAULT '{}',
+  voice_notes TEXT[] DEFAULT '{}',
+  ai_summary TEXT,
+  ai_recommendations TEXT[] DEFAULT '{}',
+  version INTEGER DEFAULT 1,
+  last_updated TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 3. Founder Timeline
+CREATE TABLE IF NOT EXISTS timeline_milestones (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  title TEXT NOT NULL,
+  description TEXT,
+  status TEXT DEFAULT 'Future',
+  sort_order INTEGER NOT NULL,
+  completed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 4. Phase Unlock Engine
+CREATE TABLE IF NOT EXISTS phases (
+  id INTEGER PRIMARY KEY,
+  title TEXT NOT NULL,
+  status TEXT DEFAULT 'Locked',
+  progress INTEGER DEFAULT 0,
+  conditions JSONB DEFAULT '[]'::jsonb,
+  description TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 5. Decision Records (Founder Memory)
+CREATE TABLE IF NOT EXISTS decision_records (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  title TEXT NOT NULL,
+  context TEXT,
+  why TEXT,
+  alternatives TEXT[] DEFAULT '{}',
+  risks TEXT[] DEFAULT '{}',
+  expected_outcome TEXT,
+  actual_outcome TEXT,
+  lessons_learned TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Enable RLS (even though user said No Auth, it's good practice for Supabase migration)
+ALTER TABLE vault_documents ENABLE ROW LEVEL SECURITY;
+ALTER TABLE rd_library ENABLE ROW LEVEL SECURITY;
+ALTER TABLE timeline_milestones ENABLE ROW LEVEL SECURITY;
+ALTER TABLE phases ENABLE ROW LEVEL SECURITY;
+ALTER TABLE decision_records ENABLE ROW LEVEL SECURITY;
+
+-- Allow public access for "Single Founder Mode" if needed, or restricted to auth user
+CREATE POLICY "Public Read Access" ON vault_documents FOR SELECT USING (true);
+CREATE POLICY "Public Read Access" ON rd_library FOR SELECT USING (true);
+CREATE POLICY "Public Read Access" ON timeline_milestones FOR SELECT USING (true);
+CREATE POLICY "Public Read Access" ON phases FOR SELECT USING (true);
+CREATE POLICY "Public Read Access" ON decision_records FOR SELECT USING (true);
+
+-- Insert Initial Timeline Milestones
+INSERT INTO timeline_milestones (title, description, status, sort_order) VALUES
+('Business Idea', 'Initial concept for ICECRAFT', 'Completed', 1),
+('Research', 'Deep market and technical R&D', 'Completed', 2),
+('Supplier Discovery', 'Identifying high-quality suppliers', 'Completed', 3),
+('Wine Shop Survey', 'Field research on existing retail points', 'Current', 4),
+('Prototype', 'First physical product prototype', 'Future', 5),
+('First Order', 'Initial commercial sale', 'Future', 6),
+('First Repeat Order', 'Verification of product market fit', 'Future', 7),
+('Monthly Break-even', 'Financial stability milestone', 'Future', 8),
+('VyaparSethu Funding', 'Seed stage investment', 'Future', 9),
+('Expansion', 'Scale beyond initial market', 'Future', 10),
+('Hotels', 'B2B luxury hotel partnership launch', 'Future', 11),
+('White Label', 'Manufacturing for external brands', 'Future', 12),
+('Premium Ice', 'Specialized clear ice products', 'Future', 13),
+('Luxury Diamond Ice', 'The ICECRAFT Diamond signature launch', 'Future', 14),
+('Export', 'International shipping expansion', 'Future', 15),
+('Manufacturing Plant', 'Own industrial facility', 'Future', 16),
+('Multiple Cities', 'National footprint', 'Future', 17),
+('International Expansion', 'Global brand presence', 'Future', 18)
+ON CONFLICT DO NOTHING;
+
+-- Insert Initial Phases
+INSERT INTO phases (id, title, status, progress, description, conditions) VALUES
+(0, 'Phase 0: Foundation', 'Unlocked', 100, 'Initial R&D, brand architecture, and initial supplier outreach.', '[{"text": "Market Analysis Complete", "met": true}, {"text": "Brand Name Selected", "met": true}, {"text": "Core Team Identified", "met": true}]'::jsonb),
+(1, 'Phase 1: Market Entry', 'Locked', 35, 'Local pilot launch and retail survey validation.', '[{"text": "Survey Target Achieved (50+ Wine Shops)", "met": false}, {"text": "Supplier Approved & Contracted", "met": true}, {"text": "Budget Approved for Pilot", "met": false}]'::jsonb),
+(2, 'Phase 2: Operational Scale', 'Locked', 0, 'B2B hotel expansion and cold chain industrialization.', '[{"text": "Monthly Sales Target Achieved", "met": false}, {"text": "Repeat Order Target Achieved", "met": false}, {"text": "Positive Cash Flow Verified", "met": false}]'::jsonb)
+ON CONFLICT (id) DO UPDATE SET
+  title = EXCLUDED.title,
+  status = EXCLUDED.status,
+  progress = EXCLUDED.progress,
+  description = EXCLUDED.description,
+  conditions = EXCLUDED.conditions;
+
+-- Insert Initial Documents
+INSERT INTO vault_documents (title, category, content, tags) VALUES
+('Company Vision', 'Vision', 'To redefine the luxury beverage experience through precision engineering and artistic craftsmanship, making ICECRAFT a global standard for premium spirits.', '{"strategic", "vision", "long-term"}'),
+('Founder Mission', 'Mission', 'Building the permanent infrastructure for the ice revolution, ensuring every premium drink is served with the respect it deserves.', '{"mission", "personal", "founder"}'),
+('Why ICECASH Exists', 'Purpose', 'Because commodity ice is a disservice to top-shelf spirits. We exist to solve the dilution and purity problem in the luxury market.', '{"purpose", "market-fit"}'),
+('Core Principles', 'Principles', '1. Sub-millimeter Precision\n2. Zero Internal Impurities\n3. 8-Second Service Integration\n4. Sustainability First', '{"values", "standard"}')
+ON CONFLICT DO NOTHING;
+
+-- Insert Initial R&D
+INSERT INTO rd_library (title, category, content, status, tags, ai_summary) VALUES
+('Thermodynamic Heat Transfer Analysis', 'Premium Diamond Ice Research', 'Full study on melting rates of various ice geometries.', 'Final', '{"thermodynamics", "diamond", "ABV"}', 'Diamond facets perform nearly as well as a sphere, keeping ABV at 33.1% after 5 minutes.'),
+('57-Facet Round Brilliant Cut Specs', 'Premium Diamond Ice Research', 'Engineering specifications for the signature ice cut.', 'Final', '{"engineering", "CAD", "faceting"}', 'Standard brilliant-cut diamond shape (equivalent volume of 125 cm3).'),
+('Cold Room Failure Recovery SOP', 'Logistics Research', 'Protocol for maintaining product integrity during power outages.', 'Final', '{"SOP", "risk-management"}', 'Automated sensors must trigger backup diesel generator within 10 seconds.')
+ON CONFLICT DO NOTHING;
+
+-- Insert Initial Decisions
+INSERT INTO decision_records (title, context, why, lessons_learned) VALUES
+('Brand Name: ICECRAFT', 'Needed a name that implies both luxury and engineering.', 'ICECRAFT implies a deliberate, crafted product rather than a commoditized one.', 'Simplicity is better than cleverness.'),
+('Supplier Strategy: Multi-source', 'Initial plan was a single dedicated supplier.', 'High risk of dependency. Multiple suppliers ensure price competition and redundancy.', 'Never put all your eggs in one basket, especially in logistics.')
+ON CONFLICT DO NOTHING;

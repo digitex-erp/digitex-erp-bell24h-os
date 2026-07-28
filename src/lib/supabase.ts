@@ -5,10 +5,24 @@ const isValidSupabaseUrl = (url: any) => {
   if (!url || typeof url !== 'string') return false;
   try {
     const parsed = new URL(url);
-    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+    const valid = parsed.protocol === 'http:' || parsed.protocol === 'https:';
+    if (!valid && url !== PLACEHOLDER_URL) console.warn("[Runtime] Supabase URL has invalid protocol:", parsed.protocol);
+    return valid;
   } catch {
     return false;
   }
+};
+
+// Helper to validate that the key looks like a Supabase JWT
+const isValidSupabaseKey = (key: any) => {
+  if (!key || typeof key !== 'string') return false;
+  // Supabase keys are JWTs, which usually have 3 parts separated by dots
+  const parts = key.split('.');
+  if (parts.length !== 3 && key !== PLACEHOLDER_KEY) {
+     console.warn("[Runtime] Supabase Key does not appear to be a valid JWT. Check your VITE_SUPABASE_KEY.");
+     return false;
+  }
+  return true;
 };
 
 // Helper to extract project ID from a postgres URL if accidentally provided
@@ -26,38 +40,58 @@ const PLACEHOLDER_URL = 'https://placeholder.supabase.co';
 const PLACEHOLDER_KEY = 'placeholder-anon-key';
 
 // Try multiple common environment variable names for Supabase
-// Explicitly check for strings and avoid placeholders if they are just placeholders
 const getEnv = (key: string) => {
   const val = (import.meta.env as any)[key];
   return (val && typeof val === 'string' && val.length > 0) ? val : null;
 };
 
-let rawUrl = getEnv('VITE_SUPABASE_URL') || getEnv('SUPABASE_URL') || '';
-const rawKey = getEnv('VITE_SUPABASE_KEY') || getEnv('VITE_SUPABASE_ANON_KEY') || getEnv('SUPABASE_KEY') || getEnv('SUPABASE_ANON_KEY') || '';
+// Helper to extract project ID from a supabase URL
+const extractProjectId = (url: string) => {
+  if (!url || url === PLACEHOLDER_URL) return 'none';
+  try {
+    const parsed = new URL(url);
+    const hostParts = parsed.hostname.split('.');
+    if (hostParts.length >= 3 && hostParts[1] === 'supabase' && hostParts[2] === 'co') {
+      return hostParts[0];
+    }
+    return 'custom/unknown';
+  } catch {
+    return 'invalid';
+  }
+};
 
-// Attempt recovery if it looks like a DB string
-if (rawUrl.startsWith('postgresql://') || rawUrl.includes(':5432')) {
-  console.warn("[Runtime] Detected Database URL instead of API URL. Attempting recovery...");
-  rawUrl = tryRecoverUrl(rawUrl);
+let rawUrl = getEnv('VITE_SUPABASE_URL') || getEnv('SUPABASE_URL') || '';
+const rawKey = 
+  getEnv('VITE_SUPABASE_KEY') || 
+  getEnv('VITE_SUPABASE_ANON_KEY') || 
+  getEnv('VITE_SUPABASE_ANO') || // Specifically handle the user's secret typo found in logs
+  getEnv('SUPABASE_KEY') || 
+  getEnv('SUPABASE_ANON_KEY') || 
+  '';
+
+let finalUrl = rawUrl;
+// Attempt recovery if it looks like a DB string (Development only)
+if (import.meta.env.DEV && (rawUrl.startsWith('postgresql://') || rawUrl.includes(':5432'))) {
+  finalUrl = tryRecoverUrl(rawUrl);
 }
 
-export const supabaseUrl = isValidSupabaseUrl(rawUrl) ? rawUrl : PLACEHOLDER_URL;
+export const supabaseUrl = isValidSupabaseUrl(finalUrl) ? finalUrl : PLACEHOLDER_URL;
 export const supabaseAnonKey = rawKey || PLACEHOLDER_KEY;
+export const supabaseProjectId = extractProjectId(supabaseUrl);
 
 export const SUPABASE_CONFIGURED = 
-  isValidSupabaseUrl(rawUrl) && 
-  !!rawKey && 
+  isValidSupabaseUrl(finalUrl) && 
+  isValidSupabaseKey(rawKey) &&
   rawKey !== PLACEHOLDER_KEY;
 
 if (!SUPABASE_CONFIGURED) {
   console.warn("Supabase is NOT configured or has an invalid URL. Using placeholders to prevent crash.");
 }
 
-console.log("[Runtime] Supabase initialization: Starting", { 
-  url: supabaseUrl,
-  isValid: isValidSupabaseUrl(supabaseUrl),
-  isRecovered: rawUrl !== (getEnv('VITE_SUPABASE_URL') || getEnv('SUPABASE_URL'))
+console.log("[Runtime] Supabase Client Initialized:", { 
+  projectId: supabaseProjectId,
+  configured: SUPABASE_CONFIGURED,
+  isRecovered: finalUrl !== rawUrl
 });
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
-console.log("[Runtime] Supabase initialization: Client created");

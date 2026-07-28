@@ -8,8 +8,6 @@ import { ErrorBoundary } from './components/ErrorBoundary.tsx';
 
 // JobWorker.getInstance().start();
 
-console.log("[Runtime] main.tsx: Module loaded");
-
 // Global error listener for uncaught errors
 window.addEventListener('error', (event) => {
   console.error("[Runtime] Global Error Caught:", event.error || event.message);
@@ -17,6 +15,10 @@ window.addEventListener('error', (event) => {
 
 window.addEventListener('unhandledrejection', (event) => {
   console.error("[Runtime] Global Unhandled Rejection:", event.reason);
+  // Log the stack trace if available
+  if (event.reason && event.reason.stack) {
+    console.error("[Runtime] Rejection Stack:", event.reason.stack);
+  }
 });
 
 createRoot(document.getElementById('root')!).render(
@@ -26,4 +28,3 @@ createRoot(document.getElementById('root')!).render(
     </ErrorBoundary>
   </StrictMode>,
 );
-console.log("[Runtime] main.tsx: render() called");

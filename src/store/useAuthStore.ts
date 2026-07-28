@@ -16,22 +16,35 @@ interface AuthState {
   setLoading: (loading: boolean) => void;
 }
 
-console.log("[Runtime] useAuthStore: Module loaded");
+// TEMPORARY DEVELOPMENT AUTH BYPASS
+// Gated on import.meta.env.DEV: true under `vite dev`, statically false in
+// `vite build` output, so the bypass cannot reach a production bundle.
+export const AUTH_BYPASS = import.meta.env.DEV;
+
+const devUser: User = {
+  id: 'dev-user-id',
+  email: 'developer@bell24h.os',
+  name: 'Developer Admin',
+  role: 'ADMIN',
+};
+
 export const useAuthStore = create<AuthState>((set) => ({
-  user: null,
-  isAuthenticated: false,
-  isLoading: true,
-  
+  user: AUTH_BYPASS ? devUser : null,
+  isAuthenticated: AUTH_BYPASS,
+  isLoading: !AUTH_BYPASS,
+
   login: (user) => {
-    console.log("[Runtime] useAuthStore: login called", user.email);
     set({ user, isAuthenticated: true, isLoading: false });
   },
   logout: () => {
-    console.log("[Runtime] useAuthStore: logout called");
+    if (AUTH_BYPASS) {
+      // TEMPORARY DEVELOPMENT AUTH BYPASS: Logout disabled
+      console.log("Logout disabled in development mode");
+      return;
+    }
     set({ user: null, isAuthenticated: false, isLoading: false });
   },
   setLoading: (isLoading) => {
-    console.log("[Runtime] useAuthStore: setLoading called", isLoading);
     set({ isLoading });
   },
 }));

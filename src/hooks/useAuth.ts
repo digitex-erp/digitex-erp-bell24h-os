@@ -1,29 +1,46 @@
-import { useAuthStore } from '@/store/useAuthStore';
+import { useAuthStore, AUTH_BYPASS } from '@/store/useAuthStore';
 import { supabase } from '@/lib/supabase';
 import { useEffect } from 'react';
 import type { User } from '@/store/useAuthStore';
 
 export function useAuth() {
-  console.log("[Runtime] useAuth hook: Executing");
   const { user, isAuthenticated, isLoading, login, logout, setLoading } = useAuthStore();
 
   useEffect(() => {
-    console.log("[Runtime] useAuth effect: Running initial session check");
-    // Initial session check
-    supabase.auth.getSession().then(({ data: { session }, error }) => {
-      console.log("[Runtime] useAuth: getSession result", { hasSession: !!session, error });
-      if (session?.user) {
-        login({
-          id: session.user.id,
-          email: session.user.email || '',
-          name: session.user.user_metadata?.name || 'User',
-          role: 'ADMIN', // Hardcoded role for now
-        });
-      } else {
-        logout();
-      }
+    // TEMPORARY DEVELOPMENT AUTH BYPASS
+    // Skip Supabase session checks to maintain mock authenticated state.
+    // Gated on AUTH_BYPASS so production builds run the real auth path below.
+    if (AUTH_BYPASS) {
       setLoading(false);
-    });
+      return;
+    }
+
+    supabase.auth.getSession()
+      .then(({ data: { session }, error }) => {
+        if (error) {
+          console.error("Auth Session Error:", error);
+          logout();
+          setLoading(false);
+          return;
+        }
+        
+        if (session?.user) {
+          login({
+            id: session.user.id,
+            email: session.user.email || '',
+            name: session.user.user_metadata?.name || 'User',
+            role: 'ADMIN', // Hardcoded role for now
+          });
+        } else {
+          logout();
+        }
+        setLoading(false);
+      })
+      .catch((err) => {
+        console.error("Auth Session Promise Rejected:", err);
+        logout();
+        setLoading(false);
+      });
 
     // Listener for auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
