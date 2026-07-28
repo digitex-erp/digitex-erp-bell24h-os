@@ -55,7 +55,14 @@ export function AiProvidersPage() {
     try {
       const { data: profile } = await supabase.from('profiles').select('organization_id').eq('id', user.id).single();
       if (profile?.organization_id) {
-        const { data } = await supabase.from('ai_providers').select('*').eq('organization_id', profile.organization_id).order('priority', { ascending: true });
+        // api_key deliberately EXCLUDED — this page never displays it (the key input
+        // is always blank, with "Leave blank to keep existing key"), so the previous
+        // select('*') was an over-fetch that put credentials in the browser.
+        const { data } = await supabase
+          .from('ai_providers')
+          .select('id, name, provider_id, status, priority, default_model, temperature, max_tokens, timeout_ms, retry_count, last_request_at, last_error, organization_id, created_at, updated_at')
+          .eq('organization_id', profile.organization_id)
+          .order('priority', { ascending: true });
         if (data) setProviders(data);
       }
     } catch (err) {

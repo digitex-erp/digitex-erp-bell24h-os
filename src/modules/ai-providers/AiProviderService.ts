@@ -51,7 +51,13 @@ export interface AIProviderConfig {
   provider_id: AIProviderName;
   status: string;
   priority: number;
-  api_key: string;
+  /**
+   * Never populated in the browser. The client projection deliberately excludes
+   * the api_key column, so this is always undefined here — the existing
+   * `if (!this.config.api_key) throw` guards in each provider are what surface
+   * that. Server-side calls resolve credentials via server/ai/ProviderManager.
+   */
+  api_key?: string;
   default_model: string;
   temperature: number;
   max_tokens: number;
@@ -402,9 +408,12 @@ export class AIManagerService {
   }
   
   async getProviders(organizationId: string): Promise<BaseAIProvider[]> {
+    // api_key is deliberately EXCLUDED from this projection. Provider credentials
+    // must never reach the browser; server-side calls resolve them via
+    // server/ai/ProviderManager from the process environment instead.
     const { data: providersData, error } = await supabase
       .from('ai_providers')
-      .select('*')
+      .select('id, name, provider_id, status, priority, default_model, temperature, max_tokens, timeout_ms, retry_count, last_request_at, last_error, organization_id, created_at, updated_at')
       .eq('organization_id', organizationId)
       .eq('status', 'ACTIVE')
       .order('priority', { ascending: true });
