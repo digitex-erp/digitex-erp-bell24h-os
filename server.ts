@@ -20,6 +20,7 @@ import fs from "fs";
 import * as aiRouter from "./server/ai/ProviderRouter";
 import { requireAuth, type AuthedRequest } from "./server/middleware/requireAuth";
 import { rateLimit } from "./server/middleware/rateLimit";
+import { emitAuditEvent, newRequestId } from "./server/audit";
 
 async function startServer() {
   const app = express();
@@ -29,12 +30,42 @@ async function startServer() {
 
   app.use(express.json());
 
+  /**
+   * Development-only route guard.
+   *
+   * Responds 404 (not 403) in production so the route's existence is not disclosed.
+   * Uses the same NODE_ENV convention as the Vite middleware branch below rather
+   * than introducing a second environment-detection pattern.
+   */
+  const devOnly = (routeName: string) =>
+    (req: express.Request, res: express.Response, next: express.NextFunction) => {
+      if (process.env.NODE_ENV === "production") {
+        emitAuditEvent({
+          actor: null,
+          organizationId: null,
+          action: "route.blocked",
+          targetType: "http_request",
+          targetId: `${req.method} ${req.path}`,
+          outcome: "denied",
+          requestId: newRequestId(),
+          metadata: { route: routeName, reason: "development_only_route" },
+        });
+        res.status(404).end();
+        return;
+      }
+      next();
+    };
+
   // API routes
   app.get("/api/health", (req, res) => {
     res.json({ status: "ok" });
   });
 
-  app.get("/api/env/diagnostic", (req, res) => {
+  // Discloses which secrets are configured and the last 8 characters of each.
+  // Its only caller is the (publicly routable) /system/diagnostics page, so there
+  // is no legitimate production need — disabled outright rather than gated, to
+  // keep the attack surface smaller.
+  app.get("/api/env/diagnostic", devOnly("env-diagnostic"), (req, res) => {
     const keysToCheck = [
       'VITE_SUPABASE_URL', 
       'VITE_SUPABASE_KEY', 
@@ -113,9 +144,30 @@ async function startServer() {
     }
   });
 
-  app.get("/api/migrate", async (req, res) => {
+  /**
+   * Executes the entire schema file — including the RLS-generation DO block —
+   * against the database. Step 1 intent check (Sprint C.2A) found no production
+   * caller: the only consumer is the /system/diagnostics page, and `run_migration.cjs`
+   * already provides a standalone migration path. Disabled outside development.
+   *
+   * Retained as GET only because it is now unreachable in production; if this route
+   * is ever re-enabled for production use it must become a POST behind requireAuth
+   * plus an admin-role check, since a schema-mutating GET is CSRF-triggerable.
+   */
+  app.get("/api/migrate", devOnly("migrate"), async (req, res) => {
+    const migrationRequestId = newRequestId();
     try {
       const dbPool = getPool();
+      emitAuditEvent({
+        actor: null,
+        organizationId: null,
+        action: "db.migrate",
+        targetType: "database_schema",
+        targetId: "supabase_schema.sql",
+        outcome: "success",
+        requestId: migrationRequestId,
+        metadata: { stage: "started", environment: process.env.NODE_ENV || "development" },
+      });
       console.log("[Runtime] Starting database migration...");
       
       const schemaPath = path.join(process.cwd(), 'supabase_schema.sql');
