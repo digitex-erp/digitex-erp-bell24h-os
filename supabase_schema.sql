@@ -551,7 +551,7 @@ $$;
 INSERT INTO storage.buckets (id, name, public) VALUES ('organization-logos', 'organization-logos', true) ON CONFLICT (id) DO NOTHING;
 
 -- Storage policies
-CREATE POLICY "Public Access" ON storage.objects FOR SELECT USING (bucket_id = 'organization-logos');
+CREATE POLICY "Public Access - organization-logos" ON storage.objects FOR SELECT USING (bucket_id = 'organization-logos');
 CREATE POLICY "Auth Upload" ON storage.objects FOR INSERT WITH CHECK (bucket_id = 'organization-logos' AND auth.role() = 'authenticated');
 CREATE POLICY "Auth Update" ON storage.objects FOR UPDATE USING (bucket_id = 'organization-logos' AND auth.role() = 'authenticated');
 CREATE POLICY "Auth Delete" ON storage.objects FOR DELETE USING (bucket_id = 'organization-logos' AND auth.role() = 'authenticated');
@@ -941,8 +941,8 @@ CREATE POLICY "Org isolation insert" ON public.image_assets FOR INSERT WITH CHEC
 CREATE POLICY "Org isolation update" ON public.image_assets FOR UPDATE USING (organization_id = public.get_current_org_id());
 CREATE POLICY "Org isolation delete" ON public.image_assets FOR DELETE USING (organization_id = public.get_current_org_id());
 insert into storage.buckets (id, name, public) values ('image_assets', 'image_assets', true) on conflict do nothing;
-create policy "Public Access" on storage.objects for select using ( bucket_id = 'image_assets' );
-create policy "Auth Insert" on storage.objects for insert with check ( bucket_id = 'image_assets' and auth.role() = 'authenticated' );
+create policy "Public Access - image_assets" on storage.objects for select using ( bucket_id = 'image_assets' );
+create policy "Auth Insert - image_assets" on storage.objects for insert with check ( bucket_id = 'image_assets' and auth.role() = 'authenticated' );
 -- Video Projects
 CREATE TABLE IF NOT EXISTS public.video_projects (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -1099,8 +1099,8 @@ CREATE POLICY "Org isolation insert" ON public.video_variants FOR INSERT WITH CH
 CREATE POLICY "Org isolation update" ON public.video_variants FOR UPDATE USING (organization_id = public.get_current_org_id());
 CREATE POLICY "Org isolation delete" ON public.video_variants FOR DELETE USING (organization_id = public.get_current_org_id());
 insert into storage.buckets (id, name, public) values ('video_assets', 'video_assets', true) on conflict do nothing;
-create policy "Public Access" on storage.objects for select using ( bucket_id = 'video_assets' );
-create policy "Auth Insert" on storage.objects for insert with check ( bucket_id = 'video_assets' and auth.role() = 'authenticated' );
+create policy "Public Access - video_assets" on storage.objects for select using ( bucket_id = 'video_assets' );
+create policy "Auth Insert - video_assets" on storage.objects for insert with check ( bucket_id = 'video_assets' and auth.role() = 'authenticated' );
 -- Job Queue
 CREATE TABLE IF NOT EXISTS public.job_queue (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
