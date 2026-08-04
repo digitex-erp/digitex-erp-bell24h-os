@@ -55,4 +55,3 @@ BEGIN
     END LOOP;
 END
 $$;
-EOF

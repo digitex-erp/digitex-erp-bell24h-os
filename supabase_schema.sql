@@ -1331,7 +1331,6 @@ BEGIN
     END LOOP;
 END
 $$;
-EOF
 -- SEO Intelligence Tables
 
 CREATE TABLE IF NOT EXISTS public.seo_projects (
