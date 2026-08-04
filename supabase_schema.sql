@@ -76,11 +76,11 @@ DECLARE
     v_action text;
 BEGIN
     FOREACH v_action IN ARRAY p_actions LOOP
-        EXECUTE format('DROP POLICY IF EXISTS %L ON public.%I;', 'Org isolation ' || v_action, p_table_name);
+        EXECUTE format('DROP POLICY IF EXISTS %I ON public.%I;', 'Org isolation ' || v_action, p_table_name);
         IF v_action = 'insert' THEN
-            EXECUTE format('CREATE POLICY %L ON public.%I FOR INSERT WITH CHECK (%s);', 'Org isolation ' || v_action, p_table_name, v_using);
+            EXECUTE format('CREATE POLICY %I ON public.%I FOR INSERT WITH CHECK (%s);', 'Org isolation ' || v_action, p_table_name, v_using);
         ELSE
-            EXECUTE format('CREATE POLICY %L ON public.%I FOR %s USING (%s);', 'Org isolation ' || v_action, p_table_name, upper(v_action), v_using);
+            EXECUTE format('CREATE POLICY %I ON public.%I FOR %s USING (%s);', 'Org isolation ' || v_action, p_table_name, upper(v_action), v_using);
         END IF;
     END LOOP;
 END;
