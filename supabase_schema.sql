@@ -59,6 +59,33 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
+-- Reusable RLS policy generator (IS-00.3): creates "Org isolation <action>"
+-- policies for a table under one of three tenancy models.
+--   - Root tables:   pass p_scope_expr = NULL. Uses organization_id directly.
+--   - Child tables:  pass p_scope_expr = an EXISTS(...) expression that
+--                    resolves the table's tenant via its parent chain.
+--   - System tables: do not call this function at all; RLS stays enabled
+--                    with zero policies (default-deny).
+CREATE OR REPLACE FUNCTION public._create_org_policy(
+    p_table_name text,
+    p_scope_expr text DEFAULT NULL,
+    p_actions text[] DEFAULT ARRAY['select', 'insert', 'update', 'delete']
+) RETURNS void AS $$
+DECLARE
+    v_using text := COALESCE(p_scope_expr, 'organization_id = public.get_current_org_id()');
+    v_action text;
+BEGIN
+    FOREACH v_action IN ARRAY p_actions LOOP
+        EXECUTE format('DROP POLICY IF EXISTS %L ON public.%I;', 'Org isolation ' || v_action, p_table_name);
+        IF v_action = 'insert' THEN
+            EXECUTE format('CREATE POLICY %L ON public.%I FOR INSERT WITH CHECK (%s);', 'Org isolation ' || v_action, p_table_name, v_using);
+        ELSE
+            EXECUTE format('CREATE POLICY %L ON public.%I FOR %s USING (%s);', 'Org isolation ' || v_action, p_table_name, upper(v_action), v_using);
+        END IF;
+    END LOOP;
+END;
+$$ LANGUAGE plpgsql;
+
 -- 3. Roles
 CREATE TABLE IF NOT EXISTS public.roles (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -1322,12 +1349,20 @@ ALTER TABLE public.context_variables ENABLE ROW LEVEL SECURITY;
 
 DO $$
 DECLARE
-    t TEXT;
-    tables TEXT[] := ARRAY['context_profiles', 'brand_profiles', 'campaign_profiles', 'audience_profiles', 'context_variables'];
+    t RECORD;
 BEGIN
-    FOREACH t IN ARRAY tables LOOP
-        EXECUTE format('CREATE POLICY "Org isolation select" ON public.%I FOR SELECT USING (organization_id = public.get_current_org_id());', t);
-        EXECUTE format('CREATE POLICY "Org isolation insert" ON public.%I FOR INSERT WITH CHECK (organization_id = public.get_current_org_id());', t);
+    FOR t IN
+        SELECT * FROM (VALUES
+            ('context_profiles',  'root'::text, NULL::text),
+            ('brand_profiles',    'root',       NULL),
+            ('campaign_profiles', 'root',       NULL),
+            ('audience_profiles', 'root',       NULL),
+            ('context_variables', 'child',      'EXISTS (SELECT 1 FROM public.context_profiles cp WHERE cp.id = context_variables.context_profile_id AND cp.organization_id = public.get_current_org_id())')
+        ) AS m(table_name, model, scope_expr)
+    LOOP
+        IF t.model <> 'system' THEN
+            PERFORM public._create_org_policy(t.table_name, t.scope_expr, ARRAY['select', 'insert']);
+        END IF;
     END LOOP;
 END
 $$;
@@ -1450,12 +1485,17 @@ ALTER TABLE public.campaign_assets ENABLE ROW LEVEL SECURITY;
 
 DO $$
 DECLARE
-    t TEXT;
-    tables TEXT[] := ARRAY['campaigns', 'campaign_assets'];
+    t RECORD;
 BEGIN
-    FOREACH t IN ARRAY tables LOOP
-        EXECUTE format('CREATE POLICY "Org isolation select" ON public.%I FOR SELECT USING (organization_id = public.get_current_org_id());', t);
-        EXECUTE format('CREATE POLICY "Org isolation insert" ON public.%I FOR INSERT WITH CHECK (organization_id = public.get_current_org_id());', t);
+    FOR t IN
+        SELECT * FROM (VALUES
+            ('campaigns',       'root'::text, NULL::text),
+            ('campaign_assets', 'child',      'EXISTS (SELECT 1 FROM public.campaigns c WHERE c.id = campaign_assets.campaign_id AND c.organization_id = public.get_current_org_id())')
+        ) AS m(table_name, model, scope_expr)
+    LOOP
+        IF t.model <> 'system' THEN
+            PERFORM public._create_org_policy(t.table_name, t.scope_expr, ARRAY['select', 'insert']);
+        END IF;
     END LOOP;
 END
 $$;
@@ -1516,12 +1556,21 @@ ALTER TABLE public.media_exports ENABLE ROW LEVEL SECURITY;
 
 DO $$
 DECLARE
-    t TEXT;
-    tables TEXT[] := ARRAY['media_projects', 'media_packages', 'media_assets', 'media_timelines', 'media_compositions', 'media_exports'];
+    t RECORD;
 BEGIN
-    FOREACH t IN ARRAY tables LOOP
-        EXECUTE format('CREATE POLICY "Org isolation select" ON public.%I FOR SELECT USING (organization_id = public.get_current_org_id());', t);
-        EXECUTE format('CREATE POLICY "Org isolation insert" ON public.%I FOR INSERT WITH CHECK (organization_id = public.get_current_org_id());', t);
+    FOR t IN
+        SELECT * FROM (VALUES
+            ('media_projects',     'root'::text, NULL::text),
+            ('media_packages',     'child',      'EXISTS (SELECT 1 FROM public.media_projects mp WHERE mp.id = media_packages.project_id AND mp.organization_id = public.get_current_org_id())'),
+            ('media_assets',       'child',      'EXISTS (SELECT 1 FROM public.media_packages pk JOIN public.media_projects mp ON mp.id = pk.project_id WHERE pk.id = media_assets.package_id AND mp.organization_id = public.get_current_org_id())'),
+            ('media_timelines',    'child',      'EXISTS (SELECT 1 FROM public.media_packages pk JOIN public.media_projects mp ON mp.id = pk.project_id WHERE pk.id = media_timelines.package_id AND mp.organization_id = public.get_current_org_id())'),
+            ('media_compositions', 'child',      'EXISTS (SELECT 1 FROM public.media_packages pk JOIN public.media_projects mp ON mp.id = pk.project_id WHERE pk.id = media_compositions.package_id AND mp.organization_id = public.get_current_org_id())'),
+            ('media_exports',      'child',      'EXISTS (SELECT 1 FROM public.media_compositions mc JOIN public.media_packages pk ON pk.id = mc.package_id JOIN public.media_projects mp ON mp.id = pk.project_id WHERE mc.id = media_exports.composition_id AND mp.organization_id = public.get_current_org_id())')
+        ) AS m(table_name, model, scope_expr)
+    LOOP
+        IF t.model <> 'system' THEN
+            PERFORM public._create_org_policy(t.table_name, t.scope_expr, ARRAY['select', 'insert']);
+        END IF;
     END LOOP;
 END
 $$;
@@ -1755,18 +1804,26 @@ ALTER TABLE public.automation_events ENABLE ROW LEVEL SECURITY;
 
 DO $$
 DECLARE
-    t TEXT;
-    tables TEXT[] := ARRAY[
-        'automation_workflows', 'workflow_triggers', 'workflow_steps', 
-        'workflow_actions', 'workflow_conditions', 'workflow_variables', 
-        'workflow_history', 'workflow_logs', 'automation_rules', 
-        'automation_schedules', 'automation_events'
-    ];
+    t RECORD;
 BEGIN
-    FOREACH t IN ARRAY tables LOOP
-        EXECUTE format('CREATE POLICY "Org isolation select" ON public.%I FOR SELECT USING (organization_id = public.get_current_org_id());', t);
-        EXECUTE format('CREATE POLICY "Org isolation insert" ON public.%I FOR INSERT WITH CHECK (organization_id = public.get_current_org_id());', t);
-        EXECUTE format('CREATE POLICY "Org isolation update" ON public.%I FOR UPDATE USING (organization_id = public.get_current_org_id());', t);
+    FOR t IN
+        SELECT * FROM (VALUES
+            ('automation_workflows', 'root'::text, NULL::text),
+            ('workflow_triggers',    'child',      'EXISTS (SELECT 1 FROM public.automation_workflows w WHERE w.id = workflow_triggers.workflow_id AND w.organization_id = public.get_current_org_id())'),
+            ('workflow_steps',       'child',      'EXISTS (SELECT 1 FROM public.automation_workflows w WHERE w.id = workflow_steps.workflow_id AND w.organization_id = public.get_current_org_id())'),
+            ('workflow_actions',     'child',      'EXISTS (SELECT 1 FROM public.workflow_steps s JOIN public.automation_workflows w ON w.id = s.workflow_id WHERE s.id = workflow_actions.step_id AND w.organization_id = public.get_current_org_id())'),
+            ('workflow_conditions',  'child',      'EXISTS (SELECT 1 FROM public.workflow_steps s JOIN public.automation_workflows w ON w.id = s.workflow_id WHERE s.id = workflow_conditions.step_id AND w.organization_id = public.get_current_org_id())'),
+            ('workflow_variables',   'child',      'EXISTS (SELECT 1 FROM public.automation_workflows w WHERE w.id = workflow_variables.workflow_id AND w.organization_id = public.get_current_org_id())'),
+            ('workflow_history',     'child',      'EXISTS (SELECT 1 FROM public.automation_workflows w WHERE w.id = workflow_history.workflow_id AND w.organization_id = public.get_current_org_id())'),
+            ('workflow_logs',        'child',      'EXISTS (SELECT 1 FROM public.workflow_history h JOIN public.automation_workflows w ON w.id = h.workflow_id WHERE h.id = workflow_logs.history_id AND w.organization_id = public.get_current_org_id())'),
+            ('automation_rules',     'root',       NULL),
+            ('automation_schedules', 'child',      'EXISTS (SELECT 1 FROM public.automation_workflows w WHERE w.id = automation_schedules.workflow_id AND w.organization_id = public.get_current_org_id())'),
+            ('automation_events',    'root',       NULL)
+        ) AS m(table_name, model, scope_expr)
+    LOOP
+        IF t.model <> 'system' THEN
+            PERFORM public._create_org_policy(t.table_name, t.scope_expr, ARRAY['select', 'insert', 'update']);
+        END IF;
     END LOOP;
 END
 $$;
@@ -1871,16 +1928,24 @@ ALTER TABLE public.conversion_events ENABLE ROW LEVEL SECURITY;
 
 DO $$
 DECLARE
-    t TEXT;
-    tables TEXT[] := ARRAY[
-        'performance_projects', 'campaign_performance', 'asset_performance', 
-        'channel_performance', 'keyword_performance', 'learning_models', 
-        'recommendations', 'ab_tests', 'conversion_events'
-    ];
+    t RECORD;
 BEGIN
-    FOREACH t IN ARRAY tables LOOP
-        EXECUTE format('CREATE POLICY "Org isolation select" ON public.%I FOR SELECT USING (organization_id = public.get_current_org_id());', t);
-        EXECUTE format('CREATE POLICY "Org isolation insert" ON public.%I FOR INSERT WITH CHECK (organization_id = public.get_current_org_id());', t);
+    FOR t IN
+        SELECT * FROM (VALUES
+            ('performance_projects', 'root'::text, NULL::text),
+            ('campaign_performance', 'child',      'EXISTS (SELECT 1 FROM public.campaigns c WHERE c.id = campaign_performance.campaign_id AND c.organization_id = public.get_current_org_id())'),
+            ('asset_performance',    'system',     NULL),
+            ('channel_performance',  'child',      'EXISTS (SELECT 1 FROM public.publishing_channels ch WHERE ch.id = channel_performance.channel_id AND ch.organization_id = public.get_current_org_id())'),
+            ('keyword_performance',  'system',     NULL),
+            ('learning_models',      'root',       NULL),
+            ('recommendations',      'root',       NULL),
+            ('ab_tests',             'root',       NULL),
+            ('conversion_events',    'root',       NULL)
+        ) AS m(table_name, model, scope_expr)
+    LOOP
+        IF t.model <> 'system' THEN
+            PERFORM public._create_org_policy(t.table_name, t.scope_expr, ARRAY['select', 'insert']);
+        END IF;
     END LOOP;
 END
 $$;
