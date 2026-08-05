@@ -12,15 +12,21 @@ against the live Vercel API before starting Phase 2:
 
 - `list_teams` → only one accessible team, `bell24xs-projects` (not
   `vvishaal-penharkarbell24s-projects`, referenced earlier in this session).
-- `get_project` for `digitex-erp-bell24h-os` (`prj_8oLwDwlcBgJAuf4FFFsSWwBcFBGp`) →
-  `"live": false`, `"latestDeployment": null`, `"domains": []`.
-- `list_deployments` → 0 deployments.
+- `get_project` for `digitex-erp-bell24h-os` (`prj_8oLwDwlcBgJAuf4FFFsSWwBcFBGp`) under
+  `bell24xs-projects` → `"live": false`, `"latestDeployment": null`, `"domains": []`.
+- `list_deployments` under that same project → 0 deployments.
+- A direct `get_project` attempt against `vvishaal-penharkarbell24s-projects` returned
+  `403 Forbidden` — confirming this is a tool access-scope limitation, not evidence
+  the team or project doesn't exist.
 
-**There is no live deployed application.** Phase 2 (runtime verification) cannot be
-performed for any module. Every Phase 2 cell below is `⚪ UNKNOWN — no live deployment
-exists`, not inferred from local dev-server behavior or source code. If a deployment
-exists under a different, currently-inaccessible Vercel identity, this audit has no
-evidence of it.
+**Vercel deployment status could not be verified from this tool's current Vercel
+account access (only the `bell24xs-projects` team is reachable via this MCP
+connection). A live Production deployment for commit `942dcbd` was independently
+confirmed by the founder via direct browser inspection of the Vercel dashboard,
+showing successful build completion and "Ready" status. Phase 2 runtime verification
+against that live deployment was not performed in this audit and remains
+outstanding.** Every Phase 2 cell below is `⚪ UNKNOWN` for this reason, not inferred
+from local dev-server behavior or source code.
 
 ---
 
@@ -66,7 +72,7 @@ Legend: 🟢 COMPLETE / 🟡 PARTIAL / 🔴 NOT IMPLEMENTED / ⚫ PLACEHOLDER / 
 
 | Module | Route | UI | Backend | Database | CRUD | Auth | AI | Runtime | Status |
 |---|---|---|---|---|---|---|---|---|---|
-| Dashboard | `/dashboard` ✅ | Real, org-scoped metrics | Supabase-direct (page) | `profiles`,`organizations`,`roles` | R only | ProtectedRoute + org filter | "AI Provider Status" card is **hardcoded static badges**, no real check | ⚪ no deployment | 🟡 PARTIAL |
+| Dashboard | `/dashboard` ✅ | Real, org-scoped metrics | Supabase-direct (page) | `profiles`,`organizations`,`roles` | R only | ProtectedRoute + org filter | "AI Provider Status" card is **hardcoded static badges**, no real check | ⚪ | 🟡 PARTIAL |
 | Organizations | `/organization` ✅ | Real, profile/address/subscription tabs | Supabase-direct (page) | `profiles`,`organizations`,storage | R, U (no C, no D) | ProtectedRoute + org filter | none | ⚪ | 🟡 PARTIAL |
 | Users | none found ❌ | none dedicated; overlaps Teams | N/A | N/A | N/A | N/A | none | ⚪ | 🔴 NOT IMPLEMENTED |
 | Teams | `/team` ✅ | Real, extensive | Supabase-direct (page) | `profiles`,`roles`,`user_roles`,`audit_logs` | C (invite is **explicitly simulated**, `alert()` mock), R, U, D(role only) | ProtectedRoute + org filter | none | ⚪ | 🟡 PARTIAL |
@@ -126,7 +132,7 @@ Dimension breakdown (counted directly from the matrix above, out of the 23 reque
 | ...of which architecturally compliant (via AI Router) | 1 of 7 (Knowledge Vault only) |
 | ...of which a governance-violating direct client call | 6 of 7 |
 | ...of which additionally non-functional at runtime (dead `JobWorker`) | 3 of those 6 (Content Planner, Image Studio, Video Studio) |
-| Runtime-verified (Phase 2) | 0/23 — no live deployment exists |
+| Runtime-verified (Phase 2) | 0/23 — Vercel deployment status not verifiable from this tool's current access; not performed |
 
 ---
 
