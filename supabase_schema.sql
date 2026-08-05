@@ -1406,6 +1406,8 @@ DECLARE
     tables TEXT[] := ARRAY['seo_projects', 'seo_keywords', 'seo_keyword_clusters'];
 BEGIN
     FOREACH t IN ARRAY tables LOOP
+        EXECUTE format('DROP POLICY IF EXISTS "Org isolation select" ON public.%I;', t);
+        EXECUTE format('DROP POLICY IF EXISTS "Org isolation insert" ON public.%I;', t);
         EXECUTE format('CREATE POLICY "Org isolation select" ON public.%I FOR SELECT USING (organization_id = public.get_current_org_id());', t);
         EXECUTE format('CREATE POLICY "Org isolation insert" ON public.%I FOR INSERT WITH CHECK (organization_id = public.get_current_org_id());', t);
     END LOOP;
@@ -1676,6 +1678,8 @@ DECLARE
     tables TEXT[] := ARRAY['publishing_accounts', 'publishing_channels', 'publishing_campaigns', 'publishing_queue', 'publishing_history', 'publishing_logs', 'publishing_schedules', 'publishing_templates', 'publishing_results', 'social_accounts'];
 BEGIN
     FOREACH t IN ARRAY tables LOOP
+        EXECUTE format('DROP POLICY IF EXISTS "Org isolation select" ON public.%I;', t);
+        EXECUTE format('DROP POLICY IF EXISTS "Org isolation insert" ON public.%I;', t);
         EXECUTE format('CREATE POLICY "Org isolation select" ON public.%I FOR SELECT USING (organization_id = public.get_current_org_id());', t);
         EXECUTE format('CREATE POLICY "Org isolation insert" ON public.%I FOR INSERT WITH CHECK (organization_id = public.get_current_org_id());', t);
     END LOOP;
