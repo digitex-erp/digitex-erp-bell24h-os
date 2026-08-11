@@ -95,13 +95,19 @@ export function AiProvidersPage() {
     
     try {
       const { data: profile } = await supabase.from('profiles').select('organization_id').eq('id', user.id).single();
-      
+
       if (profile?.organization_id) {
+        // BR-01 P0: api_key is deliberately dropped from the outgoing payload. The
+        // browser must never write a raw provider credential to a tenant-readable
+        // table — see AiProviderService.ts header comment and
+        // docs/project/AA-01-TICKETS.md (AA-01-004). Provider key configuration is
+        // disabled in the UI below pending a server-side secret-storage endpoint.
+        const { api_key, ...formDataWithoutKey } = formData;
         const payload = {
-          ...formData,
+          ...formDataWithoutKey,
           organization_id: profile.organization_id
         };
-        
+
         if (editingProvider) {
           await supabase.from('ai_providers').update(payload).eq('id', editingProvider.id);
         } else {
@@ -443,13 +449,19 @@ export function AiProvidersPage() {
                 </div>
                 <div className="col-span-2 space-y-2">
                   <Label>API Key</Label>
-                  <Input 
+                  <Input
                     type="password"
-                    required={!editingProvider}
-                    placeholder={editingProvider ? "Leave blank to keep existing key" : "sk-..."}
-                    value={formData.api_key} 
-                    onChange={e => setFormData({...formData, api_key: e.target.value})} 
+                    disabled
+                    placeholder="Not available from this page — see note below"
+                    value={formData.api_key}
+                    onChange={e => setFormData({...formData, api_key: e.target.value})}
                   />
+                  <p className="text-xs text-muted-foreground">
+                    Provider keys can no longer be set from the browser (BR-01 P0
+                    fix): this field is disabled and never transmitted or saved.
+                    Key configuration requires a server-side endpoint, which is not
+                    yet built — tracked as AA-01-002/AA-01-004.
+                  </p>
                 </div>
                 <div className="space-y-2">
                   <Label>Default Model</Label>
