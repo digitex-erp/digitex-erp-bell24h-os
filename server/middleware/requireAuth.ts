@@ -10,8 +10,8 @@
  */
 
 import type { NextFunction, Request, Response } from "express";
-import { emitAuditEvent } from "../audit";
-import { resolveRequestId } from "../lib/requestContext";
+import { emitAuditEvent } from "../audit.js";
+import { resolveRequestId } from "../lib/requestContext.js";
 
 export interface AuthContext {
   userId: string;

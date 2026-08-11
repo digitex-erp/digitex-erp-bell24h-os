@@ -6,7 +6,7 @@
  */
 
 import { GoogleGenAI, Type } from "@google/genai";
-import { getCredential } from "./ProviderManager";
+import { getCredential } from "./ProviderManager.js";
 
 export const DEFAULT_MODEL = "gemini-3.6-flash";
 

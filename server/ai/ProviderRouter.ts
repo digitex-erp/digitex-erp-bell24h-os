@@ -13,8 +13,8 @@
  * This file must never be imported from `src/` (client code).
  */
 
-import { emitAuditEvent } from "../audit";
-import * as gemini from "./GeminiProvider";
+import { emitAuditEvent } from "../audit.js";
+import * as gemini from "./GeminiProvider.js";
 
 /**
  * Per-organization daily request cap.
@@ -122,4 +122,4 @@ export function generateJson<T>(ctx: RouterContext, opts: JsonOptions): Promise<
   return run<T>(ctx, () => gemini.generateJson<T>(opts));
 }
 
-export { SchemaType } from "./GeminiProvider";
+export { SchemaType } from "./GeminiProvider.js";

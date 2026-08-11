@@ -13,21 +13,26 @@ process.on('unhandledRejection', (reason, promise) => {
 
 import express from "express";
 import path from "path";
-import { createServer as createViteServer } from "vite";
 import pg from "pg";
 const { Pool } = pg;
 import fs from "fs";
-import * as aiRouter from "./server/ai/ProviderRouter";
-import { requireAuth, type AuthedRequest } from "./server/middleware/requireAuth";
-import { rateLimit } from "./server/middleware/rateLimit";
-import { emitAuditEvent, newRequestId } from "./server/audit";
-import { resolveRequestId } from "./server/lib/requestContext";
+import * as aiRouter from "./server/ai/ProviderRouter.js";
+import { requireAuth, type AuthedRequest } from "./server/middleware/requireAuth.js";
+import { requireServiceAuth, type ServiceAuthedRequest } from "./server/middleware/requireServiceAuth.js";
+import { rateLimit } from "./server/middleware/rateLimit.js";
+import { emitAuditEvent, newRequestId } from "./server/audit.js";
+import { resolveRequestId } from "./server/lib/requestContext.js";
+import { sendError } from "./server/lib/errors.js";
 
-async function startServer() {
+// OS-INTEGRATION-IMPLEMENTATION-01: extracted so a Vercel serverless entry point
+// (api/index.ts) can obtain the fully-configured Express app without also calling
+// app.listen(), which has no meaning in a serverless invocation. This is a pure
+// extraction — every route, every middleware, and the dev-vs-production static/Vite
+// branch below are unchanged; only the trailing app.listen() call moved out into
+// startServer() below. Traditional hosting (`npm run dev`, `node dist/server.cjs`)
+// is unaffected.
+export async function createApp() {
   const app = express();
-  // Configurable so the server can be run alongside other local services and so
-  // Review Gate verification can bind a free port. Default is unchanged.
-  const PORT = Number(process.env.PORT ?? 3000);
 
   app.use(express.json());
 
@@ -71,6 +76,46 @@ async function startServer() {
   app.get("/api/v1/health", (req, res) => {
     const requestId = resolveRequestId(req, res);
     res.json({ status: "ok", apiVersion: "v1", requestId });
+  });
+
+  // OS-INTEGRATION-IMPLEMENTATION-01: the first real capability route on the /api/v1
+  // surface. Gated by requireServiceAuth (system-to-system), never requireAuth
+  // (end-user) — there is no browser session in this call path. Execution goes
+  // through the existing server/ai/ProviderRouter, unchanged and unwidened: no new
+  // provider, no new provider manager, no credential exposed in the response.
+  //
+  // organizationId/userId passed to the router are fixed, non-client-supplied
+  // constants identifying "VyaparSethu as a system" for budget/audit purposes only —
+  // not a tenant mapping. See OS_INTEGRATION_DECISION_RECORD_V1.md Decisions A/B.
+  app.post("/api/v1/ai/text", requireServiceAuth, async (req, res) => {
+    const { serviceCaller, requestId } = req as ServiceAuthedRequest;
+    const { prompt } = req.body ?? {};
+
+    if (typeof prompt !== "string" || prompt.trim().length === 0) {
+      return sendError(res, 400, "VALIDATION_FAILED", requestId!, "prompt is required");
+    }
+
+    try {
+      const text = await aiRouter.generateText(
+        {
+          userId: `service:${serviceCaller!.system}`,
+          organizationId: serviceCaller!.system,
+          requestId: requestId!,
+          action: "ai.s2s.generateText",
+        },
+        { prompt },
+      );
+      res.json({ text, requestId });
+    } catch (err: any) {
+      console.error("[Runtime] S2S AI text generation error:", err.message);
+      if (err?.code === "provider_credentials_unavailable") {
+        return sendError(res, 503, "PROVIDER_UNAVAILABLE", requestId!, err.message);
+      }
+      if (err?.code === "ai_budget_exceeded") {
+        return sendError(res, 429, "RATE_LIMITED", requestId!, err.message);
+      }
+      return sendError(res, 500, "INTERNAL_ERROR", requestId!, "AI request failed");
+    }
   });
 
   // Discloses which secrets are configured and the last 8 characters of each.
@@ -376,8 +421,18 @@ async function startServer() {
     }
   });
 
-  // Vite middleware for development
+  // Vite middleware for development.
+  //
+  // OS-INTEGRATION-IMPLEMENTATION-01: `vite` is imported dynamically, inside this
+  // branch, rather than as a static top-level import. Vite (and its `rollup`
+  // dependency, which ships platform-specific native binaries as optional
+  // dependencies) is never needed in production/serverless — the previous static
+  // import loaded vite's full dependency graph on every module load regardless of
+  // which branch ran, which crashed Vercel's serverless runtime outright
+  // (`Cannot find module '@rollup/rollup-linux-x64-gnu'`, a known npm optional-
+  // dependency resolution bug) even though createViteServer was never called there.
   if (process.env.NODE_ENV !== "production") {
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
@@ -391,13 +446,24 @@ async function startServer() {
     });
   }
 
+  return app;
+}
+
+async function startServer() {
+  const app = await createApp();
+  const PORT = Number(process.env.PORT ?? 3000);
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://0.0.0.0:${PORT}`);
   });
 }
 
-startServer().catch(err => {
-  console.error("[Runtime] Critical server startup error:", err);
-});
+// Only auto-start a listening server outside the Vercel serverless runtime. Vercel
+// sets VERCEL=1 for every invocation; api/index.ts imports createApp() directly and
+// never wants a second process trying to bind a port.
+if (!process.env.VERCEL) {
+  startServer().catch(err => {
+    console.error("[Runtime] Critical server startup error:", err);
+  });
+}
 
 // Rejection handler is already at the top

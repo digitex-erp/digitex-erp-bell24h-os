@@ -1,0 +1,8 @@
+{
+  "version": 2,
+  "framework": null,
+  "buildCommand": "echo 'API-only staging build for OS-INTEGRATION-IMPLEMENTATION-01 — frontend SPA build intentionally skipped, see docs/project/OS-INTEGRATION-IMPLEMENTATION-01-REPORT.md'",
+  "rewrites": [
+    { "source": "/(.*)", "destination": "/api/index" }
+  ]
+}

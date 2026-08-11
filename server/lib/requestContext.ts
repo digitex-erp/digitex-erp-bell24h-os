@@ -13,7 +13,7 @@
  */
 
 import type { Request, Response } from "express";
-import { newRequestId } from "../audit";
+import { newRequestId } from "../audit.js";
 
 const REQUEST_ID_HEADER = "x-request-id";
 

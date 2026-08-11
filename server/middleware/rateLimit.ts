@@ -11,8 +11,8 @@
  */
 
 import type { NextFunction, Response } from "express";
-import { emitAuditEvent } from "../audit";
-import type { AuthedRequest } from "./requireAuth";
+import { emitAuditEvent } from "../audit.js";
+import type { AuthedRequest } from "./requireAuth.js";
 
 export interface RateLimitOptions {
   /** Requests permitted per window, per organization. */
