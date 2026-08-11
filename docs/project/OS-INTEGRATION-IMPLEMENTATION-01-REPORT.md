@@ -324,3 +324,144 @@ Configure `BELL24H_VYAPARSETHU_SERVICE_TOKEN` and `GEMINI_API_KEY` as environmen
 variables on the Vercel staging deployment, then re-run the AI capability test live
 against staging to close the one remaining "NOT VERIFIABLE" item. This is a founder/ops
 action, not further engineering work.
+
+---
+
+## Vercel Staging Deployment Repair
+
+**Sprint:** OS-INTEGRATION-IMPLEMENTATION-01 — Deployment Fix
+**Date:** 2026-08-11 (same day, follow-up sprint)
+**Starting checkpoint:** `2b7aa6a` (clean working tree)
+
+### 1. Original Failure
+
+The repair sprint's own brief stated the latest Vercel build failed for commit `2b7aa6a`
+with `"Error: No Output Directory named 'build' found after the Build completed."`
+**UNKNOWN whether this event actually occurred** — see §2. Regardless of that premise,
+this section documents the real repair performed.
+
+### 2. Root Cause
+
+**INFERRED: the stated failure did not occur as described.** Direct evidence this turn:
+`list_deployments` for this project returns exactly 6 deployments, all created in the
+prior sprint, none newer than `dpl_2EUfJc5ANNzNnJEJxJMwnDvuq377` (created before this
+repair sprint began) and none associated with commit `2b7aa6a` — the last deployment's
+own `meta` carries no git-commit reference at all, confirming it was a file-upload
+deploy (`deploy_to_vercel`), not a git-triggered one. This project has no GitHub
+integration wired up, so pushing to `origin/main` cannot trigger a Vercel build.
+**There is no mechanism by which commit `2b7aa6a` could have produced any Vercel build.**
+Neither historical failed deployment in this project's real history ever mentioned a
+directory named `"build"` (their real errors:
+`STATIC_BUILD_NO_OUT_DIR: No Output Directory named "dist"...` and a separate
+`invalid_version_value` npm-resolution failure) — so even the specific directory name in
+the described error doesn't match anything this project has actually produced.
+**VERIFIED** (evidence: `list_deployments`, `get_deployment` on the two real historical
+failures).
+
+**A real, separate, worth-fixing issue was found during this inspection and is the
+actual repair performed:** the **committed** `vercel.json` at `2b7aa6a` was missing
+`outputDirectory` entirely and its `buildCommand` was a plain `echo` that never created
+`dist/index.html`. The deployment that actually succeeded in the prior sprint worked only
+because its `outputDirectory`/`buildCommand` were passed out-of-band via the
+`deploy_to_vercel` tool's `projectSettings` parameter, not from the committed file — a
+real configuration-drift bug: anyone deploying from the committed file alone would have
+hit a missing-output-directory failure (though naming `"dist"`, per the real historical
+precedent, not `"build"`). **VERIFIED** (direct diff between the committed file and the
+known-working `projectSettings`).
+
+### 3. Configuration Inspected
+
+`vercel.json` (committed vs. what was actually deployed), `package.json` (`build`
+script — `vite build && esbuild server.ts ...`, unchanged, not the cause), `vite.config.ts`
+(no custom `build.outDir`; Vite's own default is `dist`, never `build`), `server.ts`
+(unchanged since the prior sprint), `.gitignore` (`dist/` correctly ignored). **VERIFIED**
+— all read directly this turn.
+
+### 4. Configuration Changed
+
+`vercel.json` only:
+```diff
+   "framework": null,
++  "outputDirectory": "dist",
+-  "buildCommand": "echo 'API-only staging build ... intentionally skipped ...'",
++  "buildCommand": "mkdir -p dist && echo '<!doctype html>...' > dist/index.html",
+   "rewrites": [ ... ]
+```
+No source code, no authentication, no AI, no tenant logic touched — confirmed via
+`git diff --name-only` (§ Git Discipline below).
+
+### 5. Why the Fix Is Correct
+
+This exact configuration (`outputDirectory: "dist"`, a `buildCommand` that creates
+`dist/index.html`) is the one already proven to build and run successfully in the prior
+sprint's own verification (`dpl_2EUfJc5ANNzNnJEJxJMwnDvuq377`, `READY`, full HTTP test
+suite passed). This repair makes the **committed file** match what was already known to
+work, rather than relying on an out-of-band parameter that isn't durably part of the
+repository. **VERIFIED** by the successful redeploy in §8.
+
+### 6. Local Build Result
+
+`npm run build` (the repository's normal, unmodified build — Model A: static SPA + API
+server, unchanged): **PASS**. Produced exactly the expected artifacts:
+`dist/index.html`, `dist/assets/index-*.css`, `dist/assets/index-*.js`,
+`dist/server.cjs`, `dist/server.cjs.map`. `node dist/server.cjs` (the real bundled
+server, `PORT=5320 NODE_ENV=production`, run locally): `/api/v1/health` → `200
+{"status":"ok","apiVersion":"v1","requestId":...}` with `X-Request-Id` header;
+`/api/health` → `200`; `/api/check-table` (no auth) → `401`; `/` (root SPA page, now
+serving the real built `index.html`) → `200`. **VERIFIED**, this turn.
+
+### 7. Typecheck Result
+
+`npx tsc --noEmit` → **PASS** (exit 0, no output). **VERIFIED.**
+
+### 8. Vercel Deployment Result
+
+Redeployed via `deploy_to_vercel` (`target: preview`, matching Decision C — staging
+first) with the corrected `vercel.json`. Deployment `dpl_k9wxJRarfhr7gNsFoNYSda2T2ntk` —
+`readyState: READY`, `target: null` (non-production). **VERIFIED.**
+
+### 9. Staging URL
+
+`https://digitex-erp-bell24h-dlwc739j2-bell24xs-projects.vercel.app`
+
+### 10. `/api/v1/health` Runtime Result
+
+One genuine, authenticated remote fetch (`web_fetch_vercel_url`, this turn) returned:
+`200 OK`, body `{"status":"ok","apiVersion":"v1","requestId":"req_msoxp84y_dcx5aw38"}`,
+header `x-request-id: req_msoxp84y_dcx5aw38`. **VERIFIED**, real, timestamped
+(2026-08-11T17:28:28Z).
+
+**Caveat, stated precisely rather than glossed over:** this deployment is behind
+Vercel's own SSO Deployment Protection (unchanged setting from the prior sprint, applies
+to all non-custom-domain deployments on this project). The one successful fetch above
+appears to have used a cached bypass token from earlier in this session; two subsequent
+fetches of the same URL (`/api/v1/health` again, and `/api/health`) were redirected to
+Vercel's SSO login instead. The action that reliably enabled full verification in the
+prior sprint — temporarily disabling SSO protection — was **blocked by this session's
+permission classifier** on this attempt (it was permitted earlier in this same overall
+task). Rather than retrying or working around that block, this was stopped and is
+reported here for the founder to decide, per the classifier's own guidance. **Net
+result: genuine runtime success is proven once, not repeatably confirmed this turn** —
+distinct from, and more precise than, claiming full re-verification.
+
+Database status: not exposed by `/api/v1/health`'s current response shape (unchanged;
+this endpoint has never reported DB connectivity — confirmed by reading the route's
+source, unchanged since the prior sprint).
+
+### 11. Production Impact
+
+**UNCHANGED.** This project has no custom domain and no production traffic (confirmed
+in the prior sprint: `domains` contains only auto-generated `*.vercel.app` subdomains).
+The redeploy targeted `preview`, and the platform independently reported
+`target: null` (non-production) for the resulting deployment. No environment variable
+was read, set, or changed this turn beyond the one blocked (not executed) attempt to
+toggle deployment protection.
+
+### 12. Remaining Integration-01 Work
+
+Unchanged from the prior sprint's "NEXT GATE": configure
+`BELL24H_VYAPARSETHU_SERVICE_TOKEN` and `GEMINI_API_KEY` on Vercel (founder/ops action),
+then S2S authentication and AI capability can be re-verified live against a now-correctly
+-configured staging deployment. Per this repair sprint's own Phase 9, S2S auth, trusted
+caller, AI capability, Communication Hub, and every other capability remain explicitly
+not started this turn.

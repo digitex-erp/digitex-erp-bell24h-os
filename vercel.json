@@ -1,8 +1,9 @@
 {
   "version": 2,
   "framework": null,
-  "buildCommand": "echo 'API-only staging build for OS-INTEGRATION-IMPLEMENTATION-01 — frontend SPA build intentionally skipped, see docs/project/OS-INTEGRATION-IMPLEMENTATION-01-REPORT.md'",
+  "outputDirectory": "dist",
+  "buildCommand": "mkdir -p dist && echo '<!doctype html><title>Bell24h-OS staging</title><p>API-only staging build for OS-INTEGRATION-IMPLEMENTATION-01. See /api/v1/health.</p>' > dist/index.html",
   "rewrites": [
-    { "source": "/(.*)", "destination": "/api/index" }
+    { "source": "/api/(.*)", "destination": "/api/index" }
   ]
 }
