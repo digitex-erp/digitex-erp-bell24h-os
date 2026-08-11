@@ -186,3 +186,130 @@ touched.
 4. **Founder decision carried over from OS-INTEGRATION-IMPLEMENTATION-02:** whether to
    close the Production-domain SSO protection gap before or independent of configuring
    real credentials — unresolved, not this sprint's to decide.
+
+---
+
+## Production Credential Verification — 03B
+
+**Date:** 2026-08-12
+**Context:** the founder manually configured `BELL24H_VYAPARSETHU_SERVICE_TOKEN` in
+Vercel (Production scope, per the founder's own statement) and redeployed. This section
+verifies the result. The actual secret value was never requested, printed, echoed, or
+discovered — every check below is a black-box HTTP/behavioral test.
+
+### Phase 1 — Git Truth
+
+`HEAD` = `f0e2520`, `origin/main` = `f0e2520`, working tree clean. **VERIFIED, matched.**
+
+### Phase 2 — Deployment Truth
+
+`list_deployments` for `digitex-erp-bell24h-os` still shows exactly the same **7**
+deployment records as every prior sprint this session — no new deployment appeared.
+`latestDeployment` is unchanged: `dpl_k9wxJRarfhr7gNsFoNYSda2T2ntk`, `target: null`,
+`readyState: READY`. **INFERRED, not VERIFIED:** if the founder's "redeploy" happened
+through the Vercel dashboard as an environment-variable-only refresh of this same
+deployment (rather than a full rebuild), it would not necessarily create a new listed
+deployment record — Phase 3's live behavioral test below is the authoritative signal,
+not this deployment list. **Commit SHA:** still **UNKNOWN / not applicable** — this
+project has no GitHub integration (re-confirmed, unchanged since the Deployment Truth
+Reconciliation sprint); no deployment record here has ever carried a git commit SHA, this
+one included. **Domain:** `digitex-erp-bell24h-os.vercel.app`, unchanged, confirmed live
+this turn (see Phase 3).
+
+### Phase 3 — Credential-Presence Diagnostic
+
+**TOKEN CONFIGURED = YES. VERIFIED, live, this turn.**
+
+The task's own suggested test (`Authorization: Bearer <random>`) does not match
+`requireServiceAuth.ts`'s actual contract — that header is never read by the middleware
+at all, so it only ever proves "no credential was sent," not "an invalid one was
+rejected." Using the **correct** header
+(`X-Bell24h-Service-Token`, the real, unchanged contract since
+OS-INTEGRATION-IMPLEMENTATION-01) with a freshly-generated random value:
+
+```
+X-Bell24h-Service-Token: <random, never real>
+→ 401 {"error_code":"AUTHENTICATION_FAILED","message":"Service credential rejected.",...}
+```
+
+This is the decisive signal: `"Service credential rejected"` only occurs when a real
+value **is** configured server-side and the comparison genuinely fails — as opposed to
+`503 PROVIDER_UNAVAILABLE` / `"...missing BELL24H_VYAPARSETHU_SERVICE_TOKEN"`, which is
+what every identical test returned in Sprints 03 and 04. **This is a real, verified
+change in production state since the last sprint** — not assumed, not carried over.
+
+### Phase 4 — Negative Auth Matrix
+
+All four tested live, this turn, against `digitex-erp-bell24h-os.vercel.app`:
+
+| Test | Result |
+|---|---|
+| No header at all | `401 AUTHENTICATION_FAILED` — "Missing x-bell24h-service-token header." |
+| Empty header value | `401 AUTHENTICATION_FAILED` — same message (empty is treated as absent) |
+| Whitespace-only header value | `401 AUTHENTICATION_FAILED` — same message |
+| Random invalid credential | `401 AUTHENTICATION_FAILED` — "Service credential rejected." (the Phase 3 signal) |
+
+**VERIFIED — all four rejected, exactly as required.** (One transient `curl`-level
+connection failure, `HTTP:000`, occurred on the first attempt at two of these tests —
+retried immediately and got a clean result both times; noted here rather than silently
+discarded, since it's evidence of a momentary network hiccup, not application behavior.)
+
+### Phase 5 — Trusted Caller Test
+
+**NOT TESTED — by design, not a failure.** This phase explicitly requires "the real
+credential from the secure environment," which this session does not have and, per this
+sprint's own absolute rule, must never request, print, or attempt to discover. The
+mechanism itself (`caller_system` fixed to `"vyaparsethu"`, client-supplied
+`caller_system`/`organization_id`/`tenant_id` fields ignored) was already fully verified
+with a real, ephemeral, locally-generated test credential in
+OS-INTEGRATION-IMPLEMENTATION-03 (§5 above) — that evidence stands; it is not re-derived
+here because doing so would require the actual production secret.
+
+### Phase 6 — `/api/v1/ai/text` Provider Boundary
+
+**NOT DIRECTLY TESTABLE this turn, same root cause as Phase 5.** Reasoned from code
+(unchanged, `git diff --stat` this turn shows zero source changes) and from Sprint 03's
+local evidence: once a request passes `requireServiceAuth`, it reaches
+`aiRouter.generateText()` → `ProviderManager.getCredential("gemini")`. Since
+`GEMINI_API_KEY` remains unconfigured (Phase 9), that call would throw
+`ProviderCredentialError` (`code: "provider_credentials_unavailable"`), which the route
+maps to `503 PROVIDER_UNAVAILABLE` — **INFERRED**, consistent with the code path and
+with Sprint 03's local test, not independently re-observed live this turn because doing
+so requires the real credential this sprint correctly withholds from this session.
+
+### Phase 7 — Secret Exposure
+
+**VERIFIED clean, this turn.** Every response body captured in Phases 3–4 above was
+inspected directly — none contains anything resembling a token value (all contain only
+the canonical error envelope: `error_code`, `message`, `request_id`, `correlation_id`,
+`retryable`). No source file, log, or document produced this turn contains the actual
+secret value — every reference to it in this section is the variable **name** only.
+
+### Phase 8 — Environment Scope
+
+**UNKNOWN — cannot be verified from this session.** No tool available this session lists
+or reads Vercel environment-variable scope assignments (confirmed by the same tool
+search performed in Sprint 03 — still no such tool exists in this toolset). An attempt
+to read a Preview-scoped deployment for comparison
+(`digitex-erp-bell24h-dlwc739j2-bell24xs-projects.vercel.app`, via
+`web_fetch_vercel_url`, read-only, no protection setting touched) was blocked by
+Vercel's own SSO protection (`302` redirect to `vercel.com/sso-api`) — consistent with
+every prior sprint's finding that deployment-specific/preview URLs remain correctly
+protected. **The founder's own stated intent (Production-only) is recorded as reported,
+not independently verified** — this is not the same as confirming
+`ENVIRONMENT SCOPE = INCORRECT`, which would require positive evidence of the token also
+working on a Preview deployment, which this session cannot obtain.
+
+### Phase 9 — Gemini
+
+`GEMINI_API_KEY` = **NOT CONFIGURED BY THIS SPRINT.** Not touched, not requested, not
+inspected.
+
+### Summary
+
+The founder's configuration action is real and took effect: `BELL24H_VYAPARSETHU_SERVICE_TOKEN`
+is now present on the production deployment, confirmed by a genuine behavioral change
+(`503` → `401` on the identical invalid-credential test) between Sprint 04 and this
+verification. The mechanism correctly rejects every invalid input tested. Full
+trusted-caller and provider-boundary re-verification with the *real* credential is not
+possible from this session by design, and was not attempted.
