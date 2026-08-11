@@ -10,7 +10,8 @@
  */
 
 import type { NextFunction, Request, Response } from "express";
-import { emitAuditEvent, newRequestId } from "../audit";
+import { emitAuditEvent } from "../audit";
+import { resolveRequestId } from "../lib/requestContext";
 
 export interface AuthContext {
   userId: string;
@@ -48,7 +49,10 @@ function bearerToken(req: Request): string | null {
  */
 export async function requireAuth(req: Request, res: Response, next: NextFunction) {
   const authedReq = req as AuthedRequest;
-  const requestId = newRequestId();
+  // Reuses an inbound X-Request-Id if the caller supplied one (e.g. a future
+  // VyaparSethu integration propagating its own trace ID), otherwise generates one via
+  // the existing newRequestId() — see server/lib/requestContext.ts.
+  const requestId = resolveRequestId(req, res);
   authedReq.requestId = requestId;
 
   const deny = (status: number, code: string, reason: string) => {

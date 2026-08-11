@@ -21,6 +21,7 @@ import * as aiRouter from "./server/ai/ProviderRouter";
 import { requireAuth, type AuthedRequest } from "./server/middleware/requireAuth";
 import { rateLimit } from "./server/middleware/rateLimit";
 import { emitAuditEvent, newRequestId } from "./server/audit";
+import { resolveRequestId } from "./server/lib/requestContext";
 
 async function startServer() {
   const app = express();
@@ -59,6 +60,17 @@ async function startServer() {
   // API routes
   app.get("/api/health", (req, res) => {
     res.json({ status: "ok" });
+  });
+
+  // /api/v1/* — new versioned SDK surface. Additive only: no existing route below is
+  // renamed or moved into this namespace. See
+  // docs/architecture/BELL24H_OS_VYAPARSETHU_SDK_API_CONTRACT_V1.md Section 05.
+  // Unauthenticated by design, mirroring /api/health above (Section 18) — this route
+  // demonstrates the request-ID propagation and response-envelope conventions the new
+  // surface uses; it is not a capability route.
+  app.get("/api/v1/health", (req, res) => {
+    const requestId = resolveRequestId(req, res);
+    res.json({ status: "ok", apiVersion: "v1", requestId });
   });
 
   // Discloses which secrets are configured and the last 8 characters of each.
@@ -121,7 +133,7 @@ async function startServer() {
   // AI provider access is owned by server/ai/* — see ProviderManager for the
   // credential contract. Route handlers must not construct provider clients.
 
-  app.get("/api/check-table", async (req, res) => {
+  app.get("/api/check-table", requireAuth, async (req, res) => {
     try {
       const dbPool = getPool();
       console.log("[Runtime] DB Connection attempt starting...");
@@ -133,7 +145,7 @@ async function startServer() {
     }
   });
 
-  app.get("/api/check-users-count", async (req, res) => {
+  app.get("/api/check-users-count", requireAuth, async (req, res) => {
     try {
       const dbPool = getPool();
       const result = await dbPool.query("SELECT count(*) FROM auth.users;");
@@ -195,7 +207,15 @@ async function startServer() {
   });
 
   // Knowledge Vault Endpoints
-  app.get("/api/vault/documents", async (req, res) => {
+  //
+  // Gate C: `requireAuth` closes anonymous access to these routes. It does NOT
+  // make the data tenant-safe — these tables carry no organization_id column, so
+  // there is no tenant boundary to scope by, and the pooled DATABASE_URL
+  // connection below bypasses RLS regardless. Any authenticated user of any
+  // organization can still read every row. Adding a tenant column is a data-model
+  // change and therefore a Council decision, not a Gate C change; see the
+  // Knowledge Vault tenancy memo in docs/project/GATE_C_REMEDIATION_REPORT.md.
+  app.get("/api/vault/documents", requireAuth, async (req, res) => {
     try {
       const dbPool = getPool();
       const result = await dbPool.query("SELECT * FROM vault_documents ORDER BY last_updated DESC");
@@ -206,7 +226,7 @@ async function startServer() {
     }
   });
 
-  app.post("/api/vault/documents", async (req, res) => {
+  app.post("/api/vault/documents", requireAuth, async (req, res) => {
     const { title, category, content, tags } = req.body;
     try {
       const dbPool = getPool();
@@ -221,7 +241,7 @@ async function startServer() {
     }
   });
 
-  app.get("/api/vault/rd", async (req, res) => {
+  app.get("/api/vault/rd", requireAuth, async (req, res) => {
     try {
       const dbPool = getPool();
       const result = await dbPool.query("SELECT * FROM rd_library ORDER BY last_updated DESC");
@@ -232,7 +252,7 @@ async function startServer() {
     }
   });
 
-  app.get("/api/vault/timeline", async (req, res) => {
+  app.get("/api/vault/timeline", requireAuth, async (req, res) => {
     try {
       const dbPool = getPool();
       const result = await dbPool.query("SELECT * FROM timeline_milestones ORDER BY sort_order ASC");
@@ -243,7 +263,7 @@ async function startServer() {
     }
   });
 
-  app.get("/api/vault/phases", async (req, res) => {
+  app.get("/api/vault/phases", requireAuth, async (req, res) => {
     try {
       const dbPool = getPool();
       const result = await dbPool.query("SELECT * FROM phases ORDER BY id ASC");
@@ -254,7 +274,7 @@ async function startServer() {
     }
   });
 
-  app.get("/api/vault/decisions", async (req, res) => {
+  app.get("/api/vault/decisions", requireAuth, async (req, res) => {
     try {
       const dbPool = getPool();
       const result = await dbPool.query("SELECT * FROM decision_records ORDER BY created_at DESC");
