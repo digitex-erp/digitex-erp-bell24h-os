@@ -66,3 +66,44 @@ someone with direct Vercel dashboard or CLI access to this project.
    prove.
 
 No source code was changed. No secret was printed, invented, or committed.
+
+---
+
+## Retry — 2026-08-12
+
+**Prerequisite re-check (Phase 0), live, this turn, not trusted from memory:**
+
+```
+POST /api/v1/ai/text, no credential
+→ 401 {"error_code":"AUTHENTICATION_FAILED","message":"Missing x-bell24h-service-token header.",...}
+
+POST /api/v1/ai/text, X-Bell24h-Service-Token: <random, never real>
+→ 401 {"error_code":"AUTHENTICATION_FAILED","message":"Service credential rejected.",...}
+```
+
+No regression since OS-INTEGRATION-IMPLEMENTATION-03B. **VERIFIED**, live, this turn.
+
+**Header contract re-confirmed directly from source** (not assumed): `server/middleware/requireServiceAuth.ts:36` —
+`SERVICE_TOKEN_HEADER = "x-bell24h-service-token"`. `Authorization` is never referenced
+anywhere in that file. The correct contract was used throughout.
+
+**Phase 2 (secure caller availability): unchanged, still unavailable.** This session has
+no mechanism to construct an authenticated request without the real
+`BELL24H_VYAPARSETHU_SERVICE_TOKEN` value itself becoming visible to it — no credential
+vault, no server-side proxy, no `vercel env pull` (not attempted, explicitly forbidden
+regardless). Per this sprint's own instruction, the secret was not obtained merely to
+complete this test.
+
+**A second, independent blocker exists alongside the first:** `GEMINI_API_KEY`'s
+configuration status is **UNKNOWN**, not merely "not yet checked" — there is no
+unauthenticated path to determine it. `/api/env/diagnostic` (the one route that would
+reveal *whether* it's set, never its value) returns `404` in production by design
+(confirmed repeatedly across this session), and every other path to that information
+requires first passing `requireServiceAuth`, which requires the same secret this session
+correctly does not have. **Full detail in
+`docs/project/OS-INTEGRATION-IMPLEMENTATION-04B-GEMINI-PROOF-REPORT.md`.**
+
+**Retry verdict:** `END-TO-END CALL: NOT ATTEMPTED — NO SECURE CALLER`, unchanged in
+substance from the original stop, now with the S2S prerequisite itself freshly
+re-verified rather than assumed. See the 04B report for the fuller breakdown requested by
+that sprint's own template.
