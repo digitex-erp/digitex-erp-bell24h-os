@@ -465,3 +465,183 @@ then S2S authentication and AI capability can be re-verified live against a now-
 -configured staging deployment. Per this repair sprint's own Phase 9, S2S auth, trusted
 caller, AI capability, Communication Hub, and every other capability remain explicitly
 not started this turn.
+
+---
+
+## Deployment Truth Reconciliation
+
+**Sprint:** OS-INTEGRATION-IMPLEMENTATION-01 — Deployment Truth Reconciliation
+**Date:** 2026-08-12
+**HEAD:** `465f280` (unchanged by this sprint — investigation and documentation only)
+
+### Summary — the founder's screenshot is correct, and points at a real finding
+
+**The "Production" badge is genuine, not a misread UI label, and it uncovered a real
+security-relevant gap: this project's Production domain
+(`digitex-erp-bell24h-os.vercel.app`) is live and publicly reachable without the SSO
+protection this sprint's own settings claimed to enforce.** Confirmed with direct,
+unauthenticated HTTP evidence, this turn — see §6.
+
+### 1. `465f280` Deployment Records
+
+**VERIFIED — zero deployments carry any git-commit association at all, for any commit,
+ever, in this project.** `list_deployments` for `digitex-erp-bell24h-os`
+(`prj_8oLwDwlcBgJAuf4FFFsSWwBcFBGp`) returns **7 total deployments**. Every one's `meta`
+field is either empty (`{}`) or contains only `lambdaRuntimeStats` — none carries a
+`githubCommitSha`, branch name, or any other git reference. This is expected: every
+deployment in this project's history was created via `deploy_to_vercel` (a file-upload
+deploy path, explicitly documented as "no git repo and no CLI needed"), never via a
+GitHub-integration-triggered build. **There is no deployment record anywhere in this
+project literally "for" commit `465f280`** — the deployment that happens to contain the
+same file content `465f280` also contains
+(`dpl_k9wxJRarfhr7gNsFoNYSda2T2ntk`) was created *before* that commit existed locally,
+via a manually-uploaded file tree, not a git checkout.
+
+| Deployment ID | URL | state | readyState | target | createdAt |
+|---|---|---|---|---|---|
+| `dpl_k9wxJRarfhr7gNsFoNYSda2T2ntk` | `digitex-erp-bell24h-dlwc739j2-...` | READY | READY | `null` | 2026-08-11T17:27:17Z |
+| `dpl_2EUfJc5ANNzNnJEJxJMwnDvuq377` | `digitex-erp-bell24h-mwyoloqh5-...` | READY | READY | `null` | 2026-08-11T (prior sprint) |
+| `dpl_9dBBKwBaamrFqQmE3T87rKwDVpvM` | `digitex-erp-bell24h-9alj56zez-...` | READY | READY | `null` | 2026-08-11T (prior sprint) |
+| `dpl_98y3scCBE8GfxKaRmJgdma6UiNia` | `digitex-erp-bell24h-91rblufvq-...` | READY | READY | `null` | 2026-08-11T (prior sprint) |
+| `dpl_4QRK6MN2UJ2XMoVC5zBFmAvKTnTv` | `digitex-erp-bell24h-2lva7gutm-...` | READY | READY | `null` | 2026-08-11T (prior sprint) |
+| `dpl_6LwVY9NqVDMcbBfqmc1Zh5i5Hydz` | `digitex-erp-bell24h-52khaaza7-...` | ERROR | ERROR | `null` | 2026-08-11T (prior sprint, npm resolution failure) |
+| `dpl_9W5L1A2fVEfURAJHkHXuwHtnYiBo` | `digitex-erp-bell24h-47u703kae-...` | ERROR | ERROR | **`production`** | 2026-08-11T (prior sprint — the project's very first deployment ever, auto-assigned production target by the platform, failed to build) |
+
+None of the seven carry a git commit SHA. **VERIFIED.**
+
+### 2. Environment: `PRODUCTION` and `PREVIEW`, via two different mechanisms — not a single simple answer
+
+**INFERRED, with strong direct evidence:** exactly one deployment record has ever had
+`target: "production"` in Vercel's API (`dpl_9W5L1A2fVEfURAJHkHXuwHtnYiBo`), and it is in
+`ERROR` state — it never successfully served anything. Every deployment since, including
+the current `latestDeployment` (`dpl_k9wxJRarfhr7gNsFoNYSda2T2ntk`), reports
+`target: null` via the API.
+
+**However — this is not the full picture, and the founder's screenshot is why.** The
+project's short-form default domain, `digitex-erp-bell24h-os.vercel.app`, is **not
+listed** in `get_project`'s own `domains` array (which only lists two longer, team-scoped
+aliases) — it is Vercel's automatic, inherent default domain for the project, assigned
+independent of any explicit "add domain" action. Direct, unauthenticated `curl` against
+that domain (§6) returns **my own application's exact content** — the placeholder
+`Bell24h-OS staging` HTML and a genuine `/api/v1/health` JSON response — proving this
+domain is live and currently serving the same deployment content as
+`dpl_k9wxJRarfhr7gNsFoNYSda2T2ntk`. This domain is, by Vercel's own platform convention,
+the project's **Production environment's** default domain. A dashboard view keyed off
+that domain would correctly show a "Production" badge — **the badge is accurate to what
+Vercel's platform considers Production for this project**, even though the per-deployment
+API `target` field for the deployment currently occupying it reports `null`.
+
+**Reconciling Phase 4's five options precisely:** this is **closest to option 3+4
+combined** — there are not "two deployments for the same commit" in the sense of two
+separate builds; there is **one deployment, serving two roles**: it is both the project's
+`latestDeployment` (reported `target: null`, a "preview"-style record) and, independently,
+the deployment currently occupying the Production domain slot (which Vercel's dashboard
+correctly labels "Production"). The API's per-deployment `target` field and the
+project's actual domain-based environment assignment are **two different, not fully
+consistent signals** in this project's current state — both are real, neither is wrong,
+they just answer different questions. **VERIFIED** that the domain serves this content;
+**INFERRED** (not directly confirmed via a dashboard screenshot on this session's side)
+that this is exactly what the founder's badge reflects — but it is the only
+evidence-supported explanation, and no alternative (a second project, a different repo,
+a misread label) survived investigation.
+
+### 3. Project Configuration
+
+- **Production branch:** **UNKNOWN / not applicable** — no GitHub repository is linked to
+  this Vercel project (see below), so there is no git-branch-to-environment mapping to
+  report.
+- **GitHub connected to Vercel:** **INFERRED: NO.** Every one of the 7 deployments in this
+  project's history lacks any git metadata; `deploy_to_vercel` (the only deployment
+  mechanism used, ever, for this project) is explicitly a non-git, file-upload path. This
+  session holds no direct "list connected git integrations" tool, so this is inferred
+  from consistent absence of evidence across every deployment record, not confirmed via a
+  dedicated settings endpoint.
+- **Git pushes automatically create deployments:** **NO** — follows directly from the
+  above; this session's `git push` calls throughout this entire task family have never
+  once been followed by a new deployment appearing in `list_deployments` unless this
+  session explicitly called `deploy_to_vercel` itself.
+- **Deployment protection (Vercel Authentication / SSO):** reported by
+  `get_project_deployment_protection` as `enabled: true`,
+  `deploymentType: "prod_deployment_urls_and_all_previews"` — **but this setting is not
+  actually being enforced on the production domain**, per §6's direct evidence. Recorded
+  precisely as a contradiction between the settings API's stated value and observed
+  runtime behavior, not resolved by assumption. One plausible, evidence-adjacent
+  explanation: earlier this task family, setting `ssoProtection` with
+  `deploymentType: "all"` was rejected outright by the API with
+  `"Vercel Authentication is not available on your plan for production deployments"` —
+  suggesting this team's plan may not actually support enforcing SSO on production
+  traffic at all, and the `"prod_deployment_urls_and_all_previews"` value that *was*
+  accepted may only be enforced for its preview portion. **INFERRED**, not confirmed via
+  Vercel support or billing detail this session has no access to.
+- **Environment variable environments:** **UNCHANGED, NO new secrets configured** —
+  `BELL24H_VYAPARSETHU_SERVICE_TOKEN` and `GEMINI_API_KEY` were not set, inspected, or
+  referenced with any value this turn. **VERIFIED** — no write action to environment
+  variables was attempted this sprint.
+
+### 4. Screenshot Reconciliation — Direct Answers to Phase 4's Six Questions
+
+1. **Does the dashboard badge really represent Production?** Yes — it reflects the
+   project's actual Production domain slot, which is genuinely serving live content.
+2. **Does the deployment record report a different target?** Yes — the same underlying
+   deployment's own API record reports `target: null`. Both are true simultaneously; they
+   describe different aspects of Vercel's data model (see §2).
+3. **Are there two deployments for the same commit?** No — one deployment, occupying two
+   roles (project `latestDeployment` and Production-domain occupant).
+4. **Is the UI label being interpreted incorrectly?** No — the label is accurate to what
+   is actually being served on the Production domain.
+5. **Does the URL belong to a production deployment?** If the founder's screenshot shows
+   `digitex-erp-bell24h-os.vercel.app` (or its dashboard entry) — yes, genuinely.
+6. **Does the URL belong to a preview deployment?** The *other* URLs this task family has
+   been testing against (the `-dlwc739j2-`, `-mwyoloqh5-` etc. deployment-specific
+   hostnames, and the two longer `domains[]` aliases) are, by contrast, the ones actually
+   gated by SSO protection — functioning as the "preview" side of this same picture.
+
+### 5. Domain Verification
+
+`digitex-erp-bell24h-os.vercel.app` is **VERIFIED, by direct evidence this turn, to be
+the project's own default/Production domain** — not a preview deployment URL, not a
+project alias in the `domains[]` list sense (it doesn't appear there, being automatic
+rather than explicitly added), and not an unrelated project: the content served is
+byte-identical to this project's own known application code (confirmed via the exact
+placeholder HTML string and the `/api/v1/health` JSON shape, both authored in this task
+family and found nowhere else).
+
+### 6. Runtime Check (read-only; no protection settings changed this turn)
+
+| Target | Result |
+|---|---|
+| Deployment-specific URL (`digitex-erp-bell24h-dlwc739j2-...`), `/api/v1/health` | `302` → Vercel SSO redirect. **PROTECTED BY VERCEL DEPLOYMENT PROTECTION.** |
+| Project alias domain (`digitex-erp-bell24h-os-bell24hhelpline-8523-...`), `/api/v1/health` | `302` → Vercel SSO redirect. **PROTECTED BY VERCEL DEPLOYMENT PROTECTION.** |
+| Project default domain (`digitex-erp-bell24h-os.vercel.app`), `/api/v1/health` | **`200 OK`**, plain unauthenticated `curl`, this turn — `{"status":"ok","apiVersion":"v1","requestId":"req_msp0dq6n_le5dgv5u"}`. **VERIFIED reachable, unprotected.** |
+| Same domain, `/` | `200 OK`, serves this project's own placeholder HTML. **VERIFIED.** |
+| Same domain, `/api/env/diagnostic` | `404` — the existing `devOnly` production guard is working correctly. **VERIFIED no diagnostic/secret-disclosure route is reachable.** |
+| Same domain, `/api/v1/ai/text` (no credential) | `401 AUTHENTICATION_FAILED`, canonical envelope, no secret leaked. **VERIFIED fail-closed even though the transport itself is unprotected.** |
+| Same domain, `/api/check-table` (no auth) | `401 {"error":"unauthenticated",...}`. **VERIFIED unchanged, fail-closed.** |
+
+**APPLICATION RUNTIME: VERIFIED** (genuinely reachable, both protected and unprotected
+paths exist depending on which domain is used) — **not** simply "PROTECTED," because one
+real, public path bypasses protection entirely.
+
+**Security posture, stated plainly:** the application's own code is behaving correctly
+under this exposure — every route that should require authentication does, the dev-only
+diagnostic route is correctly gated, and no secret is configured anywhere to leak. The
+finding is that the **transport-level gate this task family believed was covering all
+traffic does not cover this specific domain**, which is exactly the situation the
+founder's screenshot flagged and which this task's own instruction ("this contradiction
+MUST be resolved before any credentials are configured") anticipated. **No S2S or AI
+provider credential should be configured until this is either accepted as an acceptable
+risk (nothing secret is exposed today) or fixed (a deliberate decision, correctly out of
+this sprint's locked scope).**
+
+### 7. Security Boundary
+
+**VERIFIED: no new secret was configured, inspected, or printed this turn.**
+`BELL24H_VYAPARSETHU_SERVICE_TOKEN` and `GEMINI_API_KEY` remain unset on every Vercel
+deployment in this project, confirmed indirectly via the `401`/`503`-shaped responses
+observed throughout this task family and directly via this sprint's explicit
+instruction not to touch them, which was followed.
+
+### Final Determination
+
+See the structured verdict block in the final message of this sprint (not duplicated
+here to avoid drift between two copies of the same facts).
