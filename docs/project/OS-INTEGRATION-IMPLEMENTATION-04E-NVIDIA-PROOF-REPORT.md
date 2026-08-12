@@ -155,13 +155,60 @@ behavior, error handling, or audit metadata shape.
 **CLIENT-SIDE CREDENTIAL EXPOSURE: NONE. NO SECRET VALUE PRESENT ANYWHERE IN THIS DIFF,
 THE BUILT CLIENT BUNDLE, GIT HISTORY, OR ANY DOCUMENTATION PRODUCED THIS SPRINT.**
 
+## Operator Production Proof — NVIDIA — VERIFIED
+
+The founder/operator performed the real production proof call directly, from their own
+terminal, using the real production `BELL24H_VYAPARSETHU_SERVICE_TOKEN`. That credential
+was never pasted into this session, chat, git, source code, logs, or any documentation —
+consistent with the standing absolute rule honored throughout every prior sprint.
+
+- **Date:** 2026-08-12
+- **Endpoint:** `POST /api/v1/ai/text`
+- **Provider:** `nvidia`
+- **Prompt:** `Return exactly: BELL24H-OS-NVIDIA-PROOF-OK`
+- **HTTP status:** `200`
+- **Proof response marker received:** `BELL24H-OS-NVIDIA-PROOF-OK`
+- **Authentication:** production S2S credential accepted (`X-Bell24h-Service-Token`
+  validated by `requireServiceAuth`)
+- **NVIDIA provider execution:** successful — the adapter reached NVIDIA's real API and
+  returned a real completion
+- **Real production API call:** **VERIFIED**
+- **Performed by:** operator, manually, from PowerShell — not by this session
+- **Credential value:** **NEVER RECORDED** — not the service token, not
+  `NVIDIA_API_KEY`, not any header or bearer value, not any other field of the response
+  beyond the proof marker and status
+
+This closes the one gap every prior sprint in this integration correctly stopped at: the
+routing, the adapter, and the S2S boundary were already proven at the local-runtime
+level (Phase 4 above); this is the first confirmation that the same path also works
+end-to-end against NVIDIA's real production API, through the real production deployment.
+
+### Architectural Verdict
+
+| Item | Status |
+|---|---|
+| NVIDIA production provider | **VERIFIED** |
+| S2S authentication | **VERIFIED** |
+| Server-side NVIDIA adapter | **VERIFIED** |
+| `/api/v1/ai/text` NVIDIA routing | **VERIFIED** |
+| Real NVIDIA API execution | **VERIFIED** |
+| End-to-end Bell24h-OS → NVIDIA | **VERIFIED** |
+| Gemini | not required for the NVIDIA proof |
+| `GEMINI_API_KEY` | not configured / not required for this path |
+
+### Secret Safety
+
+This section, and this document as a whole, contains no service token, no NVIDIA API
+key, no credential value, and no bearer/header value. No secret was inspected, requested,
+or retrieved to produce this record — only the operator-reported HTTP status and proof
+marker were used.
+
 ## Remaining Blocker
 
-Identical, standing blocker across the whole session: no secure mechanism exists for this
-Claude Code session to make a real, credentialed production HTTP request. Closing it
-requires either the operator running the real proof call themselves (instructions above)
-or a future, deliberately-designed credential-mediation mechanism — neither exists today,
-and building the latter is out of scope for this sprint.
+**None, for the NVIDIA text-generation path.** The one blocker every prior sprint in this
+integration stopped at — no secure mechanism for this session to make a real
+credentialed production call — has been closed by the operator's own manual proof call
+above. No future sprint needs to re-attempt this specific proof.
 
 ---
 
@@ -172,10 +219,10 @@ and building the latter is out of scope for this sprint.
 | ROUTE WIRING | **IMPLEMENTED** — `provider` field added to `/api/v1/ai/text`, additive and backward-compatible |
 | GEMINI PATH (default) | **VERIFIED UNCHANGED** — local runtime test + source inspection |
 | NVIDIA PATH REACHABLE | **VERIFIED, LOCAL RUNTIME** — real local HTTP round-trip through `createApp()`, 6/6 |
-| REAL PRODUCTION PROOF CALL | **NOT ATTEMPTED — no secure authenticated caller available to this session** |
-| OPERATOR ACTION NEEDED | **YES** — exact `curl` command provided above; report back status/body/request ID only |
-| SECRET EXPOSURE | **NONE FOUND** — verified in diff, client bundle, server bundle (names only, no values), `src/`, and this document |
+| REAL PRODUCTION PROOF CALL | **VERIFIED** — operator-performed, HTTP 200, proof marker `BELL24H-OS-NVIDIA-PROOF-OK` received |
+| OPERATOR ACTION NEEDED | **DONE** — proof call completed by the operator; see § above |
+| SECRET EXPOSURE | **NONE FOUND** — verified in diff, client bundle, server bundle (names only, no values), `src/`, and this document; production proof recorded without any credential value |
 | BUILD | **PASS** |
 | TYPECHECK | **PASS** |
-| GIT | pending this sprint's commit + push (below) |
-| NEXT GATE | Real production NVIDIA proof — blocked on operator running the command above and reporting back status/body/request ID (never the credential) |
+| GIT | in sync, `HEAD == origin/main`, clean tree (verified after this closeout's commit) |
+| NEXT GATE | **STOP.** Do not begin another provider or add fallback/multi-provider routing until the founder explicitly approves the next architecture step. |
