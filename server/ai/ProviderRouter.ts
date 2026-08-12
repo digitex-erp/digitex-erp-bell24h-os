@@ -15,6 +15,7 @@
 
 import { emitAuditEvent } from "../audit.js";
 import * as gemini from "./GeminiProvider.js";
+import * as nvidia from "./NvidiaProvider.js";
 
 /**
  * Per-organization daily request cap.
@@ -76,6 +77,7 @@ export interface JsonOptions extends TextOptions {
 
 async function run<T>(
   ctx: RouterContext,
+  provider: string,
   execute: () => Promise<gemini.ProviderResult<T>>,
 ): Promise<T> {
   const startedAt = Date.now();
@@ -91,7 +93,7 @@ async function run<T>(
       targetId: ctx.requestId,
       outcome: "success",
       requestId: ctx.requestId,
-      metadata: { provider: "gemini", model: result.model, latencyMs: result.latencyMs },
+      metadata: { provider, model: result.model, latencyMs: result.latencyMs },
     });
 
     return result.data;
@@ -105,7 +107,7 @@ async function run<T>(
       outcome: "failure",
       requestId: ctx.requestId,
       metadata: {
-        provider: "gemini",
+        provider,
         latencyMs: Date.now() - startedAt,
         errorCode: err?.code ?? "provider_error",
       },
@@ -115,11 +117,21 @@ async function run<T>(
 }
 
 export function generateText(ctx: RouterContext, opts: TextOptions): Promise<string> {
-  return run(ctx, () => gemini.generateText(opts));
+  return run(ctx, "gemini", () => gemini.generateText(opts));
 }
 
 export function generateJson<T>(ctx: RouterContext, opts: JsonOptions): Promise<T> {
-  return run<T>(ctx, () => gemini.generateJson<T>(opts));
+  return run<T>(ctx, "gemini", () => gemini.generateJson<T>(opts));
+}
+
+// OS-INTEGRATION-IMPLEMENTATION-04D: NVIDIA registered through the existing Provider
+// Router, reusing run()'s budget/audit/error-normalization wrapper unchanged. Additive
+// only — generateText/generateJson above (used by the existing /api/vault/ai-summary
+// and /api/vault/mentor-advice routes) are byte-identical in behavior; this is a new
+// export, not a replacement. /api/v1/ai/text does not call this yet — that wiring is
+// deferred to OS-INTEGRATION-IMPLEMENTATION-04E, which owns the real-call proof.
+export function generateNvidiaText(ctx: RouterContext, opts: TextOptions): Promise<string> {
+  return run(ctx, "nvidia", () => nvidia.generateText(opts));
 }
 
 export { SchemaType } from "./GeminiProvider.js";

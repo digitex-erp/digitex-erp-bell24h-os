@@ -13,7 +13,7 @@
  * This file must never be imported from `src/` (client code).
  */
 
-export type ServerProviderName = "gemini";
+export type ServerProviderName = "gemini" | "nvidia";
 
 export interface ProviderCredential {
   provider: ServerProviderName;
@@ -31,6 +31,7 @@ export class ProviderCredentialError extends Error {
 
 const ENV_VAR_BY_PROVIDER: Record<ServerProviderName, string> = {
   gemini: "GEMINI_API_KEY",
+  nvidia: "NVIDIA_API_KEY",
 };
 
 /**
