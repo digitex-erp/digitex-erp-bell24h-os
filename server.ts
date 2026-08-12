@@ -89,22 +89,34 @@ export async function createApp() {
   // not a tenant mapping. See OS_INTEGRATION_DECISION_RECORD_V1.md Decisions A/B.
   app.post("/api/v1/ai/text", requireServiceAuth, async (req, res) => {
     const { serviceCaller, requestId } = req as ServiceAuthedRequest;
-    const { prompt } = req.body ?? {};
+    const { prompt, provider } = req.body ?? {};
 
     if (typeof prompt !== "string" || prompt.trim().length === 0) {
       return sendError(res, 400, "VALIDATION_FAILED", requestId!, "prompt is required");
     }
 
+    // OS-INTEGRATION-IMPLEMENTATION-04E: optional, explicit provider selection.
+    // Omitted (the existing, default case) preserves exactly the prior behavior —
+    // every caller that doesn't ask for a specific provider still reaches Gemini,
+    // unchanged. "nvidia" reaches the adapter registered in 04D. Anything else is
+    // rejected cleanly rather than silently falling back to a default, so a typo'd
+    // provider name never silently generates against the wrong provider.
+    if (provider !== undefined && provider !== "gemini" && provider !== "nvidia") {
+      return sendError(res, 400, "VALIDATION_FAILED", requestId!, `Unknown provider "${provider}".`);
+    }
+
+    const ctx = {
+      userId: `service:${serviceCaller!.system}`,
+      organizationId: serviceCaller!.system,
+      requestId: requestId!,
+      action: "ai.s2s.generateText",
+    };
+
     try {
-      const text = await aiRouter.generateText(
-        {
-          userId: `service:${serviceCaller!.system}`,
-          organizationId: serviceCaller!.system,
-          requestId: requestId!,
-          action: "ai.s2s.generateText",
-        },
-        { prompt },
-      );
+      const text =
+        provider === "nvidia"
+          ? await aiRouter.generateNvidiaText(ctx, { prompt })
+          : await aiRouter.generateText(ctx, { prompt });
       res.json({ text, requestId });
     } catch (err: any) {
       console.error("[Runtime] S2S AI text generation error:", err.message);
