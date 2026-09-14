@@ -32,6 +32,7 @@ import { AutomationBuilderPage } from "@/pages/AutomationBuilderPage";
 import { PerformanceDashboardPage } from "@/pages/PerformanceDashboardPage";
 import { SystemDiagnosticsPage } from "@/pages/SystemDiagnosticsPage";
 import { KnowledgeVaultPage } from "@/pages/KnowledgeVaultPage";
+import { IndustryDashboardPage } from "@/pages/IndustryDashboardPage";
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
@@ -97,6 +98,11 @@ export default function App() {
           <Route path="settings" element={<SettingsPage />} />
           <Route path="admin" element={<AdminPage />} />
           <Route path="database" element={<DatabasePage />} />
+          {/* BELL24H_OS_EXECUTION_BACKLOG.md TASK-08 (GOV-4): this page was fully
+              built but never routed anywhere, making it unreachable even by
+              direct URL. Routing it, not removing it, since the underlying
+              service (IndustryIntelligenceService) is real. */}
+          <Route path="industry-dashboard" element={<IndustryDashboardPage />} />
         </Route>
       </Routes>
     </BrowserRouter>

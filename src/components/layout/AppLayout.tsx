@@ -21,7 +21,8 @@ import {
   FileText,
   Image as ImageIcon,
   Video as VideoIcon,
-  Activity
+  Activity,
+  Factory
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -93,6 +94,11 @@ const sidebarNavItems = [
     title: "Context Engine",
     href: "/context-profiles",
     icon: LayoutDashboard,
+  },
+  {
+    title: "Industry Intelligence",
+    href: "/industry-dashboard",
+    icon: Factory,
   },
   {
     title: "Admin",
