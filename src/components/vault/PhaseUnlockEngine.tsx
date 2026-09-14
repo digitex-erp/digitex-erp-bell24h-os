@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Lock, Unlock, CheckCircle, Circle, AlertCircle, Loader2 } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
+import { authedFetchJson, AuthedFetchError } from "@/lib/authedFetch";
 
 interface Phase {
   id: number;
@@ -18,16 +19,22 @@ interface Phase {
 export function PhaseUnlockEngine() {
   const [phases, setPhases] = useState<Phase[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch("/api/vault/phases")
-      .then(res => res.json())
+    authedFetchJson<Phase[]>("/api/vault/phases")
       .then(data => {
         setPhases(data);
         setLoading(false);
       })
       .catch(err => {
         console.error("Failed to fetch phases:", err);
+        setError(
+          err instanceof AuthedFetchError && err.status === 401
+            ? "Your session could not be verified — try signing in again."
+            : "Could not load phases.",
+        );
+        setPhases([]);
         setLoading(false);
       });
   }, []);
@@ -49,6 +56,11 @@ export function PhaseUnlockEngine() {
           <Loader2 className="h-8 w-8 animate-spin text-primary" />
           <p className="text-sm text-muted-foreground font-bold uppercase tracking-widest">Calculating Evolution...</p>
         </div>
+      ) : error ? (
+        <Card className="border-dashed border-destructive/40 py-20 flex flex-col items-center justify-center">
+          <AlertCircle className="h-10 w-10 text-destructive mb-4" />
+          <p className="text-destructive font-medium text-sm">{error}</p>
+        </Card>
       ) : (
         <div className="grid grid-cols-1 gap-6">
           {phases.map((phase) => (

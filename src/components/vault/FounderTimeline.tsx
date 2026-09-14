@@ -13,8 +13,10 @@ import {
   Building2,
   Lock,
   Search,
-  Loader2
+  Loader2,
+  AlertTriangle
 } from "lucide-react";
+import { authedFetchJson, AuthedFetchError } from "@/lib/authedFetch";
 
 interface Milestone {
   id: string;
@@ -48,16 +50,22 @@ const ICON_MAP: Record<string, any> = {
 export function FounderTimeline() {
   const [milestones, setMilestones] = useState<Milestone[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch("/api/vault/timeline")
-      .then(res => res.json())
+    authedFetchJson<Milestone[]>("/api/vault/timeline")
       .then(data => {
         setMilestones(data);
         setLoading(false);
       })
       .catch(err => {
         console.error("Failed to fetch timeline:", err);
+        setError(
+          err instanceof AuthedFetchError && err.status === 401
+            ? "Your session could not be verified — try signing in again."
+            : "Could not load the roadmap.",
+        );
+        setMilestones([]);
         setLoading(false);
       });
   }, []);
@@ -73,6 +81,11 @@ export function FounderTimeline() {
           <div className="flex flex-col items-center justify-center py-20 space-y-4">
             <Loader2 className="h-8 w-8 animate-spin text-primary" />
             <p className="text-sm text-muted-foreground font-bold uppercase tracking-widest">Loading Roadmap...</p>
+          </div>
+        ) : error ? (
+          <div className="flex flex-col items-center justify-center py-20 space-y-4">
+            <AlertTriangle className="h-10 w-10 text-destructive" />
+            <p className="text-sm text-destructive font-medium">{error}</p>
           </div>
         ) : (
           <div className="relative space-y-0 pb-8">

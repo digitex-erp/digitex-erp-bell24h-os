@@ -1,5 +1,6 @@
 
 import { useState } from "react";
+import { authedFetchJson } from "@/lib/authedFetch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { 
@@ -121,15 +122,13 @@ function AiMentorComponent() {
   const consultMentor = async () => {
     setLoading(true);
     try {
-      const res = await fetch("/api/vault/mentor-advice", {
+      const data = await authedFetchJson<{ advice: string }>("/api/vault/mentor-advice", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           currentPhase: "Phase 0: Foundation",
           focus: "Supplier Verification"
         })
       });
-      const data = await res.json();
       if (data.advice) setAdvice(data.advice);
     } catch (err) {
       console.error("Mentor consultation failed:", err);

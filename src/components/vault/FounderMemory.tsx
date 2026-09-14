@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Brain, History, Plus, AlertTriangle, Lightbulb, MessageSquare, Loader2 } from "lucide-react";
+import { authedFetchJson, AuthedFetchError } from "@/lib/authedFetch";
 
 interface Decision {
   id: string;
@@ -18,16 +19,22 @@ interface Decision {
 export function FounderMemory() {
   const [decisions, setDecisions] = useState<Decision[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch("/api/vault/decisions")
-      .then(res => res.json())
+    authedFetchJson<Decision[]>("/api/vault/decisions")
       .then(data => {
         setDecisions(data);
         setLoading(false);
       })
       .catch(err => {
         console.error("Failed to fetch decisions:", err);
+        setError(
+          err instanceof AuthedFetchError && err.status === 401
+            ? "Your session could not be verified — try signing in again."
+            : "Could not load the decision log.",
+        );
+        setDecisions([]);
         setLoading(false);
       });
   }, []);
@@ -49,6 +56,11 @@ export function FounderMemory() {
           <Loader2 className="h-8 w-8 animate-spin text-primary" />
           <p className="text-sm text-muted-foreground font-bold uppercase tracking-widest">Recalling History...</p>
         </div>
+      ) : error ? (
+        <Card className="border-dashed border-destructive/40 py-20 flex flex-col items-center justify-center">
+          <AlertTriangle className="h-10 w-10 text-destructive mb-4" />
+          <p className="text-destructive font-medium text-sm">{error}</p>
+        </Card>
       ) : decisions.length === 0 ? (
         <Card className="border-dashed py-20 flex flex-col items-center justify-center">
           <History className="h-10 w-10 text-muted-foreground mb-4" />

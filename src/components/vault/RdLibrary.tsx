@@ -16,6 +16,7 @@ import {
   Loader2
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
+import { authedFetchJson, AuthedFetchError } from "@/lib/authedFetch";
 
 interface RdItem {
   id: string;
@@ -37,18 +38,24 @@ const RD_CATEGORIES = [
 export function RdLibrary() {
   const [items, setItems] = useState<RdItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch("/api/vault/rd")
-      .then(res => res.json())
+    authedFetchJson<RdItem[]>("/api/vault/rd")
       .then(data => {
         setItems(data);
         setLoading(false);
       })
       .catch(err => {
         console.error("Failed to fetch RD items:", err);
+        setError(
+          err instanceof AuthedFetchError && err.status === 401
+            ? "Your session could not be verified — try signing in again."
+            : "Could not load the research library.",
+        );
+        setItems([]);
         setLoading(false);
       });
   }, []);
@@ -112,6 +119,11 @@ export function RdLibrary() {
               <Loader2 className="h-8 w-8 animate-spin text-primary" />
               <p className="text-sm text-muted-foreground font-bold uppercase tracking-widest">Opening Library...</p>
             </div>
+          ) : error ? (
+            <Card className="border-dashed border-destructive/40 py-20 flex flex-col items-center justify-center">
+              <Library className="h-10 w-10 text-destructive mb-4" />
+              <p className="text-destructive font-medium text-sm">{error}</p>
+            </Card>
           ) : filteredItems.length === 0 ? (
             <Card className="border-dashed py-20 flex flex-col items-center justify-center">
               <Library className="h-10 w-10 text-muted-foreground mb-4" />

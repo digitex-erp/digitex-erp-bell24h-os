@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Plus, Search, FileText, Calendar, Tag, ArrowRight, Loader2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
+import { authedFetchJson, AuthedFetchError } from "@/lib/authedFetch";
 
 interface VaultDocument {
   id: string;
@@ -18,17 +19,23 @@ interface VaultDocument {
 export function VaultDocuments() {
   const [docs, setDocs] = useState<VaultDocument[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
 
   useEffect(() => {
-    fetch("/api/vault/documents")
-      .then(res => res.json())
+    authedFetchJson<VaultDocument[]>("/api/vault/documents")
       .then(data => {
         setDocs(data);
         setLoading(false);
       })
       .catch(err => {
         console.error("Failed to fetch docs:", err);
+        setError(
+          err instanceof AuthedFetchError && err.status === 401
+            ? "Your session could not be verified — try signing in again."
+            : "Could not load documents.",
+        );
+        setDocs([]);
         setLoading(false);
       });
   }, []);
@@ -61,6 +68,11 @@ export function VaultDocuments() {
           <Loader2 className="h-8 w-8 animate-spin text-primary" />
           <p className="text-sm text-muted-foreground font-bold uppercase tracking-widest">Accessing Vault...</p>
         </div>
+      ) : error ? (
+        <Card className="border-dashed border-destructive/40 py-20 flex flex-col items-center justify-center">
+          <Database className="h-10 w-10 text-destructive mb-4" />
+          <p className="text-destructive font-medium text-sm">{error}</p>
+        </Card>
       ) : filteredDocs.length === 0 ? (
         <Card className="border-dashed py-20 flex flex-col items-center justify-center">
           <Database className="h-10 w-10 text-muted-foreground mb-4" />
