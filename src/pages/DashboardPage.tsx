@@ -1,6 +1,5 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Activity, CreditCard, Users, Database, Building2, Server, BrainCircuit, Cpu } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
+import { Activity, CreditCard, Users, Database, Building2, AlertTriangle } from "lucide-react";
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useAuthStore } from "@/store/useAuthStore";
@@ -103,51 +102,33 @@ export function DashboardPage() {
       </div>
 
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-7">
+        {/*
+          BELL24H_OS_EXECUTION_BACKLOG.md TASK-06 (GOV-2): this card previously
+          showed hardcoded "Healthy" statuses for infrastructure that either
+          doesn't exist ("Worker Nodes — 42 instances running") or is never
+          actually checked from this page. No server-side infrastructure
+          monitoring exists yet to back a real check, so per the same pattern
+          SystemDiagnosticsPage.tsx already uses correctly, this is now an
+          explicit "not implemented" state rather than a fabricated pass.
+        */}
         <Card className="col-span-4">
           <CardHeader>
             <CardTitle>System Architecture Overview</CardTitle>
             <CardDescription>
-              Status of all running nodes and microservices.
+              Infrastructure monitoring is not implemented yet.
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="space-y-4">
-              <div className="flex items-center">
-                <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10">
-                  <Server className="h-5 w-5 text-primary" />
-                </div>
-                <div className="ml-4 space-y-1">
-                  <p className="text-sm font-medium leading-none">Core API Gateway</p>
-                  <p className="text-sm text-muted-foreground">us-east-1</p>
-                </div>
-                <div className="ml-auto font-medium text-emerald-500">
-                  Healthy
-                </div>
-              </div>
-              <div className="flex items-center">
-                <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10">
-                  <Database className="h-5 w-5 text-primary" />
-                </div>
-                <div className="ml-4 space-y-1">
-                  <p className="text-sm font-medium leading-none">Supabase Postgres</p>
-                  <p className="text-sm text-muted-foreground">Replication Active</p>
-                </div>
-                <div className="ml-auto font-medium text-emerald-500">
-                  Healthy
-                </div>
-              </div>
-              <div className="flex items-center">
-                <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10">
-                  <Cpu className="h-5 w-5 text-primary" />
-                </div>
-                <div className="ml-4 space-y-1">
-                  <p className="text-sm font-medium leading-none">Worker Nodes</p>
-                  <p className="text-sm text-muted-foreground">42 instances running</p>
-                </div>
-                <div className="ml-auto font-medium text-emerald-500">
-                  Healthy
-                </div>
-              </div>
+            <div className="flex items-start gap-3 rounded-md border border-dashed p-4">
+              <AlertTriangle className="h-5 w-5 shrink-0 text-muted-foreground" />
+              <p className="text-sm text-muted-foreground">
+                No infrastructure health checks are wired up from this dashboard.
+                Reporting a status here would be fabricated, not measured — see{" "}
+                <a href="/system/diagnostics" className="underline">
+                  System Diagnostics
+                </a>{" "}
+                for the checks that are real.
+              </p>
             </div>
           </CardContent>
         </Card>
@@ -156,39 +137,18 @@ export function DashboardPage() {
           <CardHeader>
             <CardTitle>AI Provider Status</CardTitle>
             <CardDescription>
-              Real-time telemetry from AI inference layer.
+              Real-time telemetry is not implemented yet.
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <BrainCircuit className="h-4 w-4 text-muted-foreground" />
-                  <span className="text-sm font-medium">Gemini 1.5 Pro</span>
-                </div>
-                <Badge variant="default" className="bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20">Operational</Badge>
-              </div>
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <BrainCircuit className="h-4 w-4 text-muted-foreground" />
-                  <span className="text-sm font-medium">OpenAI GPT-4o</span>
-                </div>
-                <Badge variant="default" className="bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20">Operational</Badge>
-              </div>
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <BrainCircuit className="h-4 w-4 text-muted-foreground" />
-                  <span className="text-sm font-medium">Claude 3.5 Sonnet</span>
-                </div>
-                <Badge variant="default" className="bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20">Operational</Badge>
-              </div>
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <BrainCircuit className="h-4 w-4 text-muted-foreground" />
-                  <span className="text-sm font-medium">DeepSeek V3</span>
-                </div>
-                <Badge variant="outline" className="text-amber-500 border-amber-500/20 bg-amber-500/10">Degraded</Badge>
-              </div>
+            <div className="flex items-start gap-3 rounded-md border border-dashed p-4">
+              <AlertTriangle className="h-5 w-5 shrink-0 text-muted-foreground" />
+              <p className="text-sm text-muted-foreground">
+                This dashboard does not poll AI providers for live status.
+                "OpenAI GPT-4o" and "Claude 3.5 Sonnet" are not wired server-side
+                at all; Gemini and NVIDIA are the only real, credential-isolated
+                providers this deployment has.
+              </p>
             </div>
           </CardContent>
         </Card>

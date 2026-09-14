@@ -22,13 +22,19 @@ export function DatabasePage() {
           'tags', 'tag_relations'
         ];
         const tableData = [];
-        
+
+        // BELL24H_OS_EXECUTION_BACKLOG.md TASK-06 (GOV-2): this previously
+        // labeled every row "Active" unconditionally, ignoring `error` — a
+        // table that doesn't exist or a failed query still showed "Active"
+        // with 0 rows. Status is now derived from whether the query actually
+        // succeeded.
         for (const name of tableNames) {
-          const { count } = await supabase.from(name).select('*', { count: 'exact', head: true });
+          const { count, error } = await supabase.from(name).select('*', { count: 'exact', head: true });
           tableData.push({
             name,
             rows: count ?? 0,
-            status: "Active"
+            status: error ? "Error" : "Active",
+            statusDetail: error ? error.message : null,
           });
         }
         
@@ -109,7 +115,14 @@ export function DatabasePage() {
                     <tr key={table.name} className="hover:bg-muted/50 transition-colors">
                       <td className="px-4 py-3 font-medium text-foreground">{table.name}</td>
                       <td className="px-4 py-3 text-muted-foreground">{table.rows}</td>
-                      <td className="px-4 py-3 text-right text-emerald-500">{table.status}</td>
+                      <td
+                        className={`px-4 py-3 text-right ${
+                          table.status === "Active" ? "text-emerald-500" : "text-destructive"
+                        }`}
+                        title={table.statusDetail ?? undefined}
+                      >
+                        {table.status}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
