@@ -3,7 +3,6 @@ import { cn } from "@/lib/utils";
 import {
   Bell,
   Command,
-  Settings,
   LayoutDashboard,
   Users,
   Database,
@@ -13,9 +12,7 @@ import {
   Check,
   ChevronsUpDown,
   LogOut,
-  User,
   Building,
-  Shield,
   BrainCircuit,
   TerminalSquare,
   FileText,
@@ -100,16 +97,11 @@ const sidebarNavItems = [
     href: "/industry-dashboard",
     icon: Factory,
   },
-  {
-    title: "Admin",
-    href: "/admin",
-    icon: Shield,
-  },
-  {
-    title: "Settings",
-    href: "/settings",
-    icon: Settings,
-  },
+  // PHASE 4A blocker remediation (TASK-07 / GOV-3): "Admin" and "Settings" nav
+  // entries removed — both pages presented fabricated data as real with no
+  // backing service. Their <Route> entries in App.tsx are intentionally kept
+  // (not deleted) so a direct URL now shows an honest "not implemented"
+  // message instead of the previous mock content, or nothing.
   {
     title: "Database",
     href: "/database",
@@ -282,19 +274,12 @@ export function AppLayout() {
                     <p className="text-xs leading-none text-muted-foreground">{user?.email || "user@example.com"}</p>
                   </div>
                 </DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem asChild>
-                  <Link to="/settings" className="w-full cursor-pointer flex items-center">
-                    <User className="mr-2 h-4 w-4" />
-                    <span>Profile</span>
-                  </Link>
-                </DropdownMenuItem>
-                <DropdownMenuItem asChild>
-                  <Link to="/settings" className="w-full cursor-pointer flex items-center">
-                    <Settings className="mr-2 h-4 w-4" />
-                    <span>Settings</span>
-                  </Link>
-                </DropdownMenuItem>
+                {/* PHASE 4A blocker remediation (TASK-07 / GOV-3): "Profile" and
+                    "Settings" links removed from this dropdown — both pointed at
+                    /settings, which has no real functionality behind it (see
+                    SettingsPage.tsx). Removed here too, not just the sidebar,
+                    since this was a second, separate navigation path to the
+                    same non-functional page. */}
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onClick={handleLogout} className="text-destructive focus:bg-destructive/10 cursor-pointer">
                   <LogOut className="mr-2 h-4 w-4" />
