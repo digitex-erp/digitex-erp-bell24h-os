@@ -33,6 +33,7 @@ import { PerformanceDashboardPage } from "@/pages/PerformanceDashboardPage";
 import { SystemDiagnosticsPage } from "@/pages/SystemDiagnosticsPage";
 import { KnowledgeVaultPage } from "@/pages/KnowledgeVaultPage";
 import { IndustryDashboardPage } from "@/pages/IndustryDashboardPage";
+import { CommunicationsPage } from "@/pages/CommunicationsPage";
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
@@ -103,7 +104,10 @@ export default function App() {
               direct URL. Routing it, not removing it, since the underlying
               service (IndustryIntelligenceService) is real. */}
           <Route path="industry-dashboard" element={<IndustryDashboardPage />} />
+          <Route path="communications" element={<CommunicationsPage />} />
+          <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Route>
+        <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Routes>
     </BrowserRouter>
   );

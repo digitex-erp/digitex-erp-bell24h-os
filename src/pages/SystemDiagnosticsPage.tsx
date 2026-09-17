@@ -198,8 +198,20 @@ export function SystemDiagnosticsPage() {
   };
 
   useEffect(() => {
+    // BR: previously ran once on mount with an empty dependency array. runDiagnostics()
+    // captures `user` (from useAuthStore) via closure on whichever render created it, and
+    // this effect never re-ran after that first render — so if the app-level session
+    // hydration in useAuth.ts (getSession() -> AuthService.resolveRole() -> login()) had
+    // not yet populated the store's `user` at the moment this page mounted, every check
+    // gated on `user` (Session/Org/RLS) was permanently stuck on its stale null-user
+    // result, even after the store correctly populated `user` a moment later. Meanwhile
+    // JWT/Auth checks (their own independent supabase.auth.getSession() call inside
+    // runDiagnostics) resolved correctly on their own timeline, producing the observed
+    // contradiction (JWT Valid + Session Active, alongside Login Successful/Org
+    // Context/RLS = fail). Depending on `user` re-runs diagnostics once the store's real
+    // value is known, closing that race without touching auth flow, RLS, or any other file.
     runDiagnostics();
-  }, []);
+  }, [user]);
 
   const StatusIcon = ({ status }: { status: string }) => {
     if (status === 'pass') return <CheckCircle className="h-5 w-5 text-green-500" />;

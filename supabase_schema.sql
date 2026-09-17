@@ -1142,7 +1142,16 @@ CREATE TABLE IF NOT EXISTS public.job_queue (
     started_at TIMESTAMPTZ,
     completed_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW()
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    locked_by TEXT,
+    locked_at TIMESTAMPTZ,
+    lock_expires_at TIMESTAMPTZ,
+    heartbeat_at TIMESTAMPTZ,
+    timeout_ms INTEGER DEFAULT 300000,
+    next_run_at TIMESTAMPTZ DEFAULT NOW(),
+    idempotency_key TEXT,
+    dead_letter_reason TEXT,
+    error_details JSONB
 );
 
 -- Job Dependencies
@@ -1175,6 +1184,24 @@ CREATE POLICY "Org isolation select" ON public.job_dependencies FOR SELECT USING
 CREATE POLICY "Org isolation insert" ON public.job_dependencies FOR INSERT WITH CHECK (EXISTS (SELECT 1 FROM public.job_queue WHERE id = job_id AND organization_id = public.get_current_org_id()));
 
 CREATE POLICY "Org isolation select" ON public.job_logs FOR SELECT USING (EXISTS (SELECT 1 FROM public.job_queue WHERE id = job_id AND organization_id = public.get_current_org_id()));
+
+-- Queue Runtime Performance Indexes
+CREATE INDEX IF NOT EXISTS idx_job_queue_claim_ready ON public.job_queue (
+    (CASE priority
+        WHEN 'critical' THEN 4
+        WHEN 'high'     THEN 3
+        WHEN 'medium'   THEN 2
+        WHEN 'low'      THEN 1
+        ELSE 0
+    END) DESC,
+    COALESCE(next_run_at, scheduled_at, created_at) ASC,
+    created_at ASC
+) WHERE status IN ('queued', 'retrying');
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_job_queue_org_idempotency ON public.job_queue (organization_id, idempotency_key) WHERE idempotency_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_job_queue_lease_reaper ON public.job_queue (lock_expires_at) WHERE status = 'running';
+CREATE INDEX IF NOT EXISTS idx_job_dependencies_parent ON public.job_dependencies (depends_on_job_id);
+
 -- Job Workers
 CREATE TABLE IF NOT EXISTS public.job_workers (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
