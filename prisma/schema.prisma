@@ -1,0 +1,382 @@
+// ============================================================================
+// BELL24H-OS ENTERPRISE SEO CENTER v2.0 - PRISMA SCHEMA
+// ============================================================================
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model SeoProject {
+  id                    String                 @id @default(uuid())
+  organization_id       String
+  name                  String
+  domain                String
+  target_country        String                 @default("IN")
+  target_language       String                 @default("en")
+  industry_id           String?
+  settings              Json?
+  created_at            DateTime               @default(now())
+  updated_at            DateTime               @updatedAt
+
+  keywords              SeoKeyword[]
+  competitors           SeoCompetitor[]
+  content_gaps          SeoContentGap[]
+  backlinks             SeoBacklink[]
+  site_audits           SeoSiteAudit[]
+  schema_markups        SeoSchemaMarkup[]
+  sitemaps              SeoSitemap[]
+  redirects             SeoRedirect[]
+  meta_tags             SeoMetaTag[]
+  pagespeed_reports     SeoPagespeedReport[]
+  brand_mentions        SeoBrandMention[]
+  ai_visibilities       SeoAiVisibility[]
+  citations             SeoCitation[]
+  recommendations       SeoRecommendation[]
+
+  @@map("seo_projects")
+}
+
+model SeoKeyword {
+  id                    String                 @id @default(uuid())
+  organization_id       String
+  project_id            String
+  keyword               String
+  search_volume         Int                    @default(0)
+  difficulty            Int                    @default(0)
+  cpc                   Float                  @default(0.0)
+  intent                String                 @default("Informational")
+  cluster_name          String?
+  parent_topic          String?
+  is_tracked            Boolean                @default(true)
+  current_position      Int?
+  previous_position     Int?
+  opportunity_score     Float                  @default(0.0)
+  created_at            DateTime               @default(now())
+  updated_at            DateTime               @updatedAt
+
+  project               SeoProject             @relation(fields: [project_id], references: [id], onDelete: Cascade)
+  rankings              SeoKeywordRanking[]
+
+  @@map("seo_keywords")
+}
+
+model SeoKeywordRanking {
+  id                    String                 @id @default(uuid())
+  organization_id       String
+  keyword_id            String
+  position              Int
+  previous_position     Int?
+  url                   String?
+  search_engine         String                 @default("google")
+  device                String                 @default("desktop")
+  country               String                 @default("IN")
+  recorded_at           DateTime               @default(now())
+
+  keyword               SeoKeyword             @relation(fields: [keyword_id], references: [id], onDelete: Cascade)
+
+  @@map("seo_keyword_rankings")
+}
+
+model SeoCompetitor {
+  id                    String                 @id @default(uuid())
+  organization_id       String
+  project_id            String
+  domain                String
+  name                  String?
+  authority_score       Int                    @default(0)
+  organic_traffic_estimate Int                 @default(0)
+  keywords_count        Int                    @default(0)
+  created_at            DateTime               @default(now())
+
+  project               SeoProject             @relation(fields: [project_id], references: [id], onDelete: Cascade)
+  keywords              SeoCompetitorKeyword[]
+  content_gaps          SeoContentGap[]
+
+  @@map("seo_competitors")
+}
+
+model SeoCompetitorKeyword {
+  id                    String                 @id @default(uuid())
+  organization_id       String
+  competitor_id         String
+  keyword               String
+  position              Int
+  search_volume         Int                    @default(0)
+  url                   String?
+  overlap_status        String                 @default("competitor_only")
+  created_at            DateTime               @default(now())
+
+  competitor            SeoCompetitor          @relation(fields: [competitor_id], references: [id], onDelete: Cascade)
+
+  @@map("seo_competitor_keywords")
+}
+
+model SeoContentGap {
+  id                    String                 @id @default(uuid())
+  organization_id       String
+  project_id            String
+  competitor_id         String
+  keyword               String
+  competitor_url        String?
+  our_url               String?
+  gap_type              String                 @default("missing_keyword")
+  opportunity_score     Float                  @default(0.0)
+  search_volume         Int                    @default(0)
+  difficulty            Int                    @default(0)
+  created_at            DateTime               @default(now())
+
+  project               SeoProject             @relation(fields: [project_id], references: [id], onDelete: Cascade)
+  competitor            SeoCompetitor          @relation(fields: [competitor_id], references: [id], onDelete: Cascade)
+
+  @@map("seo_content_gaps")
+}
+
+model SeoBacklink {
+  id                    String                 @id @default(uuid())
+  organization_id       String
+  project_id            String
+  source_url            String
+  target_url            String
+  anchor_text           String?
+  authority_score       Int                    @default(0)
+  link_type             String                 @default("dofollow")
+  is_toxic              Boolean                @default(false)
+  is_lost               Boolean                @default(false)
+  first_seen            DateTime               @default(now())
+  last_seen             DateTime               @default(now())
+
+  project               SeoProject             @relation(fields: [project_id], references: [id], onDelete: Cascade)
+
+  @@map("seo_backlinks")
+}
+
+model SeoSiteAudit {
+  id                    String                 @id @default(uuid())
+  organization_id       String
+  project_id            String
+  audit_type            String                 @default("full_crawl")
+  score                 Int                    @default(100)
+  total_pages_crawled   Int                    @default(0)
+  critical_errors_count Int                    @default(0)
+  warnings_count        Int                    @default(0)
+  notices_count         Int                    @default(0)
+  duration_seconds      Int                    @default(0)
+  status                String                 @default("completed")
+  created_at            DateTime               @default(now())
+
+  project               SeoProject             @relation(fields: [project_id], references: [id], onDelete: Cascade)
+  page_audits           SeoPageAudit[]
+  issues                SeoIssue[]
+
+  @@map("seo_site_audits")
+}
+
+model SeoPageAudit {
+  id                    String                 @id @default(uuid())
+  organization_id       String
+  audit_id              String
+  url                   String
+  status_code           Int
+  load_time_ms          Int                    @default(0)
+  title                 String?
+  meta_description      String?
+  h1                    String?
+  canonical_url         String?
+  word_count            Int                    @default(0)
+  internal_links_count  Int                    @default(0)
+  external_links_count  Int                    @default(0)
+  is_indexable          Boolean                @default(true)
+  issues_count          Int                    @default(0)
+  created_at            DateTime               @default(now())
+
+  audit                 SeoSiteAudit           @relation(fields: [audit_id], references: [id], onDelete: Cascade)
+
+  @@map("seo_page_audits")
+}
+
+model SeoIssue {
+  id                    String                 @id @default(uuid())
+  organization_id       String
+  audit_id              String?
+  page_url              String
+  issue_type            String
+  severity              String
+  category              String
+  message               String
+  how_to_fix            String?
+  is_resolved           Boolean                @default(false)
+  resolved_at           DateTime?
+  created_at            DateTime               @default(now())
+
+  audit                 SeoSiteAudit?          @relation(fields: [audit_id], references: [id], onDelete: Cascade)
+
+  @@map("seo_issues")
+}
+
+model SeoSchemaMarkup {
+  id                    String                 @id @default(uuid())
+  organization_id       String
+  project_id            String
+  entity_type           String
+  entity_id             String?
+  page_url              String?
+  schema_json           Json
+  validation_status     String                 @default("valid")
+  validation_errors     Json?
+  created_at            DateTime               @default(now())
+  updated_at            DateTime               @updatedAt
+
+  project               SeoProject             @relation(fields: [project_id], references: [id], onDelete: Cascade)
+
+  @@map("seo_schema_markup")
+}
+
+model SeoSitemap {
+  id                    String                 @id @default(uuid())
+  organization_id       String
+  project_id            String
+  sitemap_url           String
+  total_urls            Int                    @default(0)
+  valid_urls            Int                    @default(0)
+  error_urls            Int                    @default(0)
+  last_submitted_at     DateTime?
+  gsc_status            String                 @default("Success")
+  created_at            DateTime               @default(now())
+
+  project               SeoProject             @relation(fields: [project_id], references: [id], onDelete: Cascade)
+
+  @@map("seo_sitemaps")
+}
+
+model SeoRedirect {
+  id                    String                 @id @default(uuid())
+  organization_id       String
+  project_id            String
+  source_path           String
+  target_url            String
+  status_code           Int                    @default(301)
+  is_active             Boolean                @default(true)
+  hits_count            Int                    @default(0)
+  has_loop              Boolean                @default(false)
+  notes                 String?
+  created_at            DateTime               @default(now())
+  updated_at            DateTime               @updatedAt
+
+  project               SeoProject             @relation(fields: [project_id], references: [id], onDelete: Cascade)
+
+  @@map("seo_redirects")
+}
+
+model SeoMetaTag {
+  id                    String                 @id @default(uuid())
+  organization_id       String
+  project_id            String
+  page_url              String
+  title                 String
+  meta_description      String?
+  og_title              String?
+  og_description        String?
+  og_image              String?
+  twitter_card          String                 @default("summary_large_image")
+  ctr_score             Float                  @default(0.0)
+  created_at            DateTime               @default(now())
+  updated_at            DateTime               @updatedAt
+
+  project               SeoProject             @relation(fields: [project_id], references: [id], onDelete: Cascade)
+
+  @@map("seo_meta_tags")
+}
+
+model SeoPagespeedReport {
+  id                    String                 @id @default(uuid())
+  organization_id       String
+  project_id            String
+  url                   String
+  device                String                 @default("mobile")
+  performance_score     Int                    @default(0)
+  accessibility_score   Int                    @default(0)
+  seo_score             Int                    @default(0)
+  best_practices_score  Int                    @default(0)
+  lcp_ms                Float?
+  fid_ms                Float?
+  cls_score             Float?
+  created_at            DateTime               @default(now())
+
+  project               SeoProject             @relation(fields: [project_id], references: [id], onDelete: Cascade)
+
+  @@map("seo_pagespeed_reports")
+}
+
+model SeoBrandMention {
+  id                    String                 @id @default(uuid())
+  organization_id       String
+  project_id            String
+  brand_name            String
+  source_url            String
+  snippet               String?
+  sentiment             String                 @default("neutral")
+  is_linked             Boolean                @default(false)
+  link_type             String?
+  discovered_at         DateTime               @default(now())
+
+  project               SeoProject             @relation(fields: [project_id], references: [id], onDelete: Cascade)
+
+  @@map("seo_brand_mentions")
+}
+
+model SeoAiVisibility {
+  id                    String                 @id @default(uuid())
+  organization_id       String
+  project_id            String
+  target_query          String
+  engine                String
+  is_cited              Boolean                @default(false)
+  mention_position      Int?
+  cited_snippet         String?
+  source_url            String?
+  tracked_at            DateTime               @default(now())
+
+  project               SeoProject             @relation(fields: [project_id], references: [id], onDelete: Cascade)
+
+  @@map("seo_ai_visibility")
+}
+
+model SeoCitation {
+  id                    String                 @id @default(uuid())
+  organization_id       String
+  project_id            String
+  engine                String
+  query                 String
+  quotation_text        String
+  cited_url             String
+  is_verified           Boolean                @default(true)
+  evidence_score        Float                  @default(0.0)
+  created_at            DateTime               @default(now())
+
+  project               SeoProject             @relation(fields: [project_id], references: [id], onDelete: Cascade)
+
+  @@map("seo_citations")
+}
+
+model SeoRecommendation {
+  id                    String                 @id @default(uuid())
+  organization_id       String
+  project_id            String
+  category              String
+  title                 String
+  impact                String
+  effort                String
+  description           String
+  action_plan           Json?
+  status                String                 @default("pending")
+  created_at            DateTime               @default(now())
+
+  project               SeoProject             @relation(fields: [project_id], references: [id], onDelete: Cascade)
+
+  @@map("seo_recommendations")
+}

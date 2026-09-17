@@ -23,6 +23,7 @@ import { VideoStudioPage } from "@/pages/VideoStudioPage";
 import { JobOrchestratorPage } from "@/pages/JobOrchestratorPage";
 import { ContextProfileManagerPage } from "@/pages/ContextProfileManagerPage";
 import { SeoDashboardPage } from "@/pages/SeoDashboardPage";
+import { SeoCenterPage } from "@/pages/SeoCenterPage";
 import { CampaignDashboardPage } from "@/pages/CampaignDashboardPage";
 import { CampaignBuilderPage } from "@/pages/CampaignBuilderPage";
 import { MediaComposerDashboardPage } from "@/pages/MediaComposerDashboardPage";
@@ -88,7 +89,8 @@ export default function App() {
           <Route path="video-studio" element={<VideoStudioPage />} />
           <Route path="job-orchestrator" element={<JobOrchestratorPage />} />
           <Route path="context-profiles" element={<ContextProfileManagerPage />} />
-          <Route path="seo-intelligence" element={<SeoDashboardPage />} />
+          <Route path="seo" element={<SeoCenterPage />} />
+          <Route path="seo-intelligence" element={<Navigate to="/seo" replace />} />
           <Route path="campaigns" element={<CampaignDashboardPage />} />
           <Route path="campaigns/builder" element={<CampaignBuilderPage />} />
           <Route path="media-composer" element={<MediaComposerDashboardPage />} />

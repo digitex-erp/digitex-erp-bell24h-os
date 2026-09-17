@@ -20,7 +20,8 @@ import {
   Video as VideoIcon,
   Activity,
   Factory,
-  MessageSquare
+  MessageSquare,
+  Globe
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -72,6 +73,11 @@ const sidebarNavItems = [
     title: "Content Planner",
     href: "/content-planner",
     icon: FileText,
+  },
+  {
+    title: "SEO Center",
+    href: "/seo",
+    icon: Globe,
   },
   {
     title: "Image Studio",
