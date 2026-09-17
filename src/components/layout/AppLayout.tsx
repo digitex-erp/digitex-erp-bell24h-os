@@ -19,7 +19,8 @@ import {
   Image as ImageIcon,
   Video as VideoIcon,
   Activity,
-  Factory
+  Factory,
+  MessageSquare
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -96,6 +97,11 @@ const sidebarNavItems = [
     title: "Industry Intelligence",
     href: "/industry-dashboard",
     icon: Factory,
+  },
+  {
+    title: "Communications",
+    href: "/communications",
+    icon: MessageSquare,
   },
   // PHASE 4A blocker remediation (TASK-07 / GOV-3): "Admin" and "Settings" nav
   // entries removed — both pages presented fabricated data as real with no
