@@ -24,6 +24,9 @@ import { emitAuditEvent, newRequestId } from "./server/audit.js";
 import { resolveRequestId } from "./server/lib/requestContext.js";
 import { sendError } from "./server/lib/errors.js";
 import { postgrestFetch, SupabaseRestError } from "./server/lib/supabaseRest.js";
+import { QueueManager } from "./server/queue/QueueManager.js";
+import { WorkerRegistry } from "./server/workers/WorkerRegistry.js";
+import { WorkerSupervisor } from "./server/workers/WorkerSupervisor.js";
 
 // OS-INTEGRATION-IMPLEMENTATION-01: extracted so a Vercel serverless entry point
 // (api/index.ts) can obtain the fully-configured Express app without also calling
@@ -187,6 +190,71 @@ export async function createApp() {
     }
     return pool;
   };
+
+  const getQueueManager = () => QueueManager.getInstance(getPool());
+
+  // Queue Core Engine endpoints (Phase B.5B.1)
+  app.get("/api/v1/queue/metrics", requireAuth, async (req, res) => {
+    const { auth } = req as AuthedRequest;
+    try {
+      const qm = getQueueManager();
+      const metrics = await qm.getMetrics(auth!.organizationId);
+      res.json({ success: true, metrics });
+    } catch (err: any) {
+      console.error("[Runtime] Queue metrics error:", err.message);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/v1/queue/enqueue", requireAuth, async (req, res) => {
+    const { auth } = req as AuthedRequest;
+    const { jobType, payload, priority, idempotencyKey, scheduledAt, timeoutMs, maxRetries, dependencies } = req.body;
+
+    if (!jobType || !payload) {
+      res.status(400).json({ error: "jobType and payload are required" });
+      return;
+    }
+
+    try {
+      const qm = getQueueManager();
+      const job = await qm.enqueueJob({
+        organizationId: auth!.organizationId,
+        jobType,
+        payload,
+        priority,
+        idempotencyKey,
+        scheduledAt: scheduledAt ? new Date(scheduledAt) : undefined,
+        timeoutMs,
+        maxRetries,
+        dependencies,
+      });
+
+      res.status(201).json({ success: true, job });
+    } catch (err: any) {
+      console.error("[Runtime] Enqueue error:", err.message);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  const getWorkerRegistry = () => WorkerRegistry.getInstance(getPool(), getQueueManager());
+  const getWorkerSupervisor = () => WorkerSupervisor.getInstance(getPool(), getQueueManager());
+
+  // Worker Fleet Status endpoint (Phase B.5B.2)
+  app.get("/api/v1/workers/status", requireAuth, async (req, res) => {
+    try {
+      const registry = getWorkerRegistry();
+      const supervisor = getWorkerSupervisor();
+      const cluster = await supervisor.getClusterStatus();
+      res.json({
+        success: true,
+        worker: registry.getStatus(),
+        cluster,
+      });
+    } catch (err: any) {
+      console.error("[Runtime] Worker status error:", err.message);
+      res.status(500).json({ error: err.message });
+    }
+  });
 
   // AI provider access is owned by server/ai/* — see ProviderManager for the
   // credential contract. Route handlers must not construct provider clients.
@@ -499,8 +567,30 @@ export async function createApp() {
 async function startServer() {
   const app = await createApp();
   const PORT = Number(process.env.PORT ?? 3000);
-  app.listen(PORT, "0.0.0.0", () => {
+  app.listen(PORT, "0.0.0.0", async () => {
     console.log(`Server running on http://0.0.0.0:${PORT}`);
+
+    // Auto-start Worker Fleet and Supervisor in persistent server mode
+    if (process.env.DATABASE_URL) {
+      try {
+        const pool = new Pool({
+          connectionString: process.env.DATABASE_URL,
+          ssl: { rejectUnauthorized: false },
+          max: 20,
+        });
+        const qm = QueueManager.getInstance(pool);
+        const registry = WorkerRegistry.getInstance(pool, qm);
+        const supervisor = WorkerSupervisor.getInstance(pool, qm);
+
+        await registry.start();
+        supervisor.start();
+        console.log("[Runtime] Worker Fleet and Supervisor successfully booted.");
+      } catch (err: any) {
+        console.warn("[Runtime] Worker Fleet startup warning:", err.message);
+      }
+    } else {
+      console.log("[Runtime] Worker Fleet deferred: DATABASE_URL not yet defined in environment.");
+    }
   });
 }
 
