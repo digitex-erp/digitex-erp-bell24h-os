@@ -111,7 +111,7 @@ export class WorkerSupervisor {
           action: "worker.reaped",
           targetType: "job_workers",
           targetId: "cluster",
-          outcome: "warning",
+          outcome: "success",
           requestId: `reap_${Date.now()}`,
           metadata: { deadWorkers: deadIds },
         });
@@ -133,7 +133,7 @@ export class WorkerSupervisor {
           action: "job.reclaimed",
           targetType: "job_queue",
           targetId: "cluster",
-          outcome: "warning",
+          outcome: "success",
           requestId: `reap_${Date.now()}`,
           metadata: { reapedJobsCount },
         });

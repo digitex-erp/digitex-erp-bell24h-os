@@ -46,6 +46,7 @@ async function runSmokeTest() {
     // 5. Enqueue a test job
     console.log('[Step 5] Enqueueing test job (Type: publishing, Priority: high)...');
     const enqueuedJob = await queueManager.enqueueJob({
+      organizationId: null,
       jobType: 'publishing',
       priority: 'high',
       payload: {
