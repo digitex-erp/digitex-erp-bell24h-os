@@ -17,6 +17,31 @@ EXCEPTION
 END;
 $$ LANGUAGE plpgsql STABLE;
 
+-- Drop empty legacy skeleton tables if present to ensure clean schema rebuild
+DROP TABLE IF EXISTS 
+    public.seo_competitor_keywords,
+    public.seo_competitors, 
+    public.seo_content_opportunities, 
+    public.seo_keyword_clusters, 
+    public.seo_keyword_groups,
+    public.seo_keyword_rankings,
+    public.seo_keywords, 
+    public.seo_site_audits,
+    public.seo_audit_issues,
+    public.seo_meta_tags,
+    public.seo_backlinks,
+    public.seo_content_scores,
+    public.seo_schema_templates,
+    public.seo_broken_links,
+    public.seo_local_profiles,
+    public.seo_geo_audits,
+    public.seo_geo_citations,
+    public.seo_reports,
+    public.seo_alerts,
+    public.seo_projects, 
+    public.seo_search_intents, 
+    public.seo_topics CASCADE;
+
 -- 1. seo_projects
 CREATE TABLE IF NOT EXISTS public.seo_projects (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
