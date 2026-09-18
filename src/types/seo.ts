@@ -2,8 +2,8 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
  * 
- * BELL24H-OS ENTERPRISE SEO CENTER v3.0 - TYPES
- * Strongly-typed domain models for 15 Database Tables & 12 Enterprise Suites.
+ * BELL24H-OS ENTERPRISE SEO INTELLIGENCE PLATFORM - TYPES
+ * Strongly-typed domain models for 18 Database Tables & 12 Enterprise Suites.
  */
 
 export type KeywordIntent = 'Informational' | 'Commercial' | 'Transactional' | 'Navigational';
@@ -14,9 +14,9 @@ export type GapType = 'missing_keyword' | 'missing_topic' | 'missing_schema' | '
 export type OverlapStatus = 'shared' | 'competitor_only' | 'we_outrank' | 'they_outrank';
 export type LinkType = 'dofollow' | 'nofollow' | 'sponsored' | 'ugc';
 export type AIEngine = 'chatgpt' | 'claude' | 'gemini' | 'perplexity' | 'grok' | 'google_aio';
-export type SchemaEntityType = 'Product' | 'Organization' | 'LocalBusiness' | 'FAQPage' | 'Article' | 'HowTo' | 'Event' | 'VideoObject' | 'BreadcrumbList' | 'Review';
+export type SchemaEntityType = 'Product' | 'Organization' | 'LocalBusiness' | 'FAQPage' | 'Article' | 'HowTo' | 'Event' | 'VideoObject' | 'BreadcrumbList' | 'Review' | 'FAQ' | 'Breadcrumb';
 
-// 1. Project
+// 1. seo_projects
 export interface SeoProject {
   id: string;
   organization_id: string;
@@ -35,21 +35,7 @@ export interface SeoProject {
   updated_at: string;
 }
 
-// 2. Keyword Clusters
-export interface KeywordCluster {
-  id: string;
-  organization_id: string;
-  project_id: string;
-  cluster_name: string;
-  parent_topic: string;
-  intent_primary: KeywordIntent;
-  total_search_volume: number;
-  average_difficulty: number;
-  keyword_count?: number;
-  created_at: string;
-}
-
-// 3. Keywords & Rankings
+// 2. seo_keywords
 export interface SeoKeyword {
   id: string;
   organization_id: string;
@@ -70,7 +56,26 @@ export interface SeoKeyword {
   updated_at: string;
 }
 
-export interface SeoRanking {
+// 3. seo_keyword_groups
+export interface SeoKeywordGroup {
+  id: string;
+  organization_id: string;
+  project_id: string;
+  name: string;
+  parent_topic: string;
+  primary_intent: KeywordIntent;
+  total_search_volume: number;
+  average_difficulty: number;
+  keyword_count?: number;
+  created_at: string;
+  updated_at?: string;
+}
+
+// Alias for backwards compatibility
+export type KeywordCluster = SeoKeywordGroup & { cluster_name: string; intent_primary: KeywordIntent };
+
+// 4. seo_keyword_rankings
+export interface SeoKeywordRanking {
   id: string;
   organization_id: string;
   project_id: string;
@@ -81,34 +86,22 @@ export interface SeoRanking {
   url?: string;
   search_engine: 'google' | 'bing';
   device: DeviceType;
+  cadence?: 'daily' | 'weekly' | 'monthly';
   country: string;
   recorded_at: string;
 }
 
-// Aliases for backward compatibility
-export type SeoKeywordRanking = SeoRanking;
+// Alias for backwards compatibility
+export type SeoRanking = SeoKeywordRanking;
 
-// 4. Technical Site Audits
-export interface SeoAuditIssue {
-  id: string;
-  organization_id?: string;
-  issue_type: string;
-  severity: SeverityLevel;
-  category: IssueCategory;
-  message: string;
-  page_url: string;
-  how_to_fix?: string;
-  is_resolved?: boolean;
-  created_at?: string;
-}
-
-export interface SeoAudit {
+// 5. seo_site_audits
+export interface SeoSiteAudit {
   id: string;
   organization_id: string;
   project_id: string;
   audit_type: string;
   health_score: number;
-  score?: number; // Backward compatibility alias for health_score
+  score?: number; // Backward compatibility alias
   pages_crawled: number;
   total_pages_crawled?: number;
   issues_critical: number;
@@ -121,18 +114,38 @@ export interface SeoAudit {
   avg_lcp_ms: number;
   avg_fid_ms: number;
   avg_cls: number;
-  duration_seconds?: number;
+  crawl_depth?: number;
   status?: string;
+  duration_seconds?: number;
   issues_json?: SeoAuditIssue[];
-  completed_at: string;
+  completed_at?: string;
   created_at: string;
+  updated_at?: string;
 }
 
-// Backward compatibility alias
-export type SeoSiteAudit = SeoAudit;
+// Alias for backwards compatibility
+export type SeoAudit = SeoSiteAudit;
+
+// 6. seo_audit_issues
+export interface SeoAuditIssue {
+  id: string;
+  organization_id?: string;
+  audit_id?: string;
+  issue_type: string;
+  severity: SeverityLevel;
+  category: IssueCategory;
+  message: string;
+  page_url: string;
+  how_to_fix?: string;
+  is_resolved?: boolean;
+  resolved_at?: string;
+  created_at?: string;
+}
+
+// Alias for backwards compatibility
 export type SeoIssue = SeoAuditIssue;
 
-// 5. Meta Tag Management
+// 7. seo_meta_tags
 export interface SeoMetaTag {
   id: string;
   organization_id: string;
@@ -148,65 +161,30 @@ export interface SeoMetaTag {
   og_image?: string;
   og_type?: string;
   twitter_card?: string;
-  ctr_score?: number;
   ai_optimization_status?: string;
+  ctr_score?: number;
   created_at: string;
   updated_at: string;
 }
 
-// 6. Schema Markup Management
-export interface SeoSchema {
+// 8. seo_backlinks
+export interface SeoBacklink {
   id: string;
   organization_id: string;
   project_id: string;
-  page_url: string;
-  entity_type: SchemaEntityType;
-  schema_json: Record<string, any>;
-  validation_status: 'valid' | 'warning' | 'invalid';
-  validation_errors?: string[];
-  created_at: string;
-  updated_at: string;
+  source_url: string;
+  target_url: string;
+  anchor_text: string;
+  authority_score: number;
+  link_type: LinkType;
+  is_toxic: boolean;
+  toxicity_score?: number;
+  is_lost: boolean;
+  first_seen: string;
+  last_seen: string;
 }
 
-// Backward compatibility alias
-export type SeoSchemaMarkup = SeoSchema;
-
-// 7. Content Analysis & Inventory
-export interface SeoContentAnalysis {
-  id: string;
-  organization_id: string;
-  project_id: string;
-  page_url: string;
-  title: string;
-  word_count: number;
-  topic_cluster?: string;
-  content_score: number;
-  topical_coverage_pct: number;
-  entity_coverage_pct: number;
-  nlp_keywords: string[];
-  missing_topics: string[];
-  traffic_potential: string;
-  last_crawled_at: string;
-  created_at: string;
-}
-
-// 8. Content Brief Generator
-export interface SeoContentBrief {
-  id: string;
-  organization_id: string;
-  project_id: string;
-  target_topic: string;
-  target_intent: KeywordIntent;
-  target_word_count: number;
-  target_keywords: string[];
-  heading_outline: { heading: string; level: number; intent: string }[];
-  suggested_faqs: { question: string; answer_guideline: string }[];
-  internal_linking_suggestions: string[];
-  eeat_guidelines?: string;
-  created_at: string;
-}
-
-// 9. Competitor Intelligence
+// 9. seo_competitors
 export interface SeoCompetitor {
   id: string;
   organization_id: string;
@@ -223,6 +201,20 @@ export interface SeoCompetitor {
   updated_at?: string;
 }
 
+// 10. seo_competitor_keywords
+export interface SeoCompetitorKeyword {
+  id: string;
+  organization_id: string;
+  project_id: string;
+  competitor_id: string;
+  keyword: string;
+  position: number;
+  search_volume: number;
+  url?: string;
+  overlap_status: OverlapStatus;
+  created_at: string;
+}
+
 export interface SeoContentGap {
   id: string;
   organization_id: string;
@@ -237,42 +229,81 @@ export interface SeoContentGap {
   created_at: string;
 }
 
-export interface SeoCompetitorKeyword {
-  id: string;
-  organization_id: string;
-  competitor_id: string;
-  keyword: string;
-  position: number;
-  search_volume: number;
-  url?: string;
-  overlap_status: OverlapStatus;
-  created_at: string;
-}
-
-// 10. Backlink Intelligence
-export interface SeoBacklink {
+// 11. seo_content_scores
+export interface SeoContentScore {
   id: string;
   organization_id: string;
   project_id: string;
-  source_url: string;
-  target_url: string;
-  anchor_text: string;
-  authority_score: number;
-  link_type: LinkType;
-  is_toxic: boolean;
-  is_lost: boolean;
-  first_seen: string;
-  last_seen: string;
+  page_url: string;
+  title: string;
+  word_count: number;
+  overall_content_score: number;
+  content_score?: number; // Alias
+  readability_score: number;
+  semantic_coverage_pct: number;
+  entity_coverage_pct: number;
+  keyword_density_pct: number;
+  topic_authority_score: number;
+  eeat_signals_score: number;
+  nlp_entities?: string[];
+  nlp_keywords?: string[]; // Alias
+  missing_topics?: string[];
+  recommendations?: string[];
+  traffic_potential?: string;
+  topic_cluster?: string;
+  topical_coverage_pct?: number; // Alias
+  last_analyzed_at?: string;
+  last_crawled_at?: string; // Alias
+  created_at: string;
+  updated_at?: string;
 }
 
-// 11. Local SEO & Cluster Rankings
-export interface SeoLocalRanking {
+// Alias for backwards compatibility
+export type SeoContentAnalysis = SeoContentScore;
+
+// 12. seo_schema_templates
+export interface SeoSchemaTemplate {
+  id: string;
+  organization_id: string;
+  project_id: string;
+  page_url: string;
+  entity_type: SchemaEntityType;
+  schema_json: Record<string, any>;
+  validation_status: 'valid' | 'warning' | 'invalid';
+  validation_errors?: string[];
+  created_at: string;
+  updated_at?: string;
+}
+
+// Alias for backwards compatibility
+export type SeoSchema = SeoSchemaTemplate;
+export type SeoSchemaMarkup = SeoSchemaTemplate;
+
+// 13. seo_broken_links
+export interface SeoBrokenLink {
+  id: string;
+  organization_id: string;
+  project_id: string;
+  page_url: string;
+  target_url: string;
+  link_type: 'internal' | 'external' | 'asset';
+  status_code: number;
+  error_type: '404' | '500' | 'redirect_loop' | 'missing_asset' | 'timeout';
+  is_resolved: boolean;
+  resolved_at?: string;
+  detected_at: string;
+}
+
+// 14. seo_local_profiles
+export interface SeoLocalProfile {
   id: string;
   organization_id: string;
   project_id: string;
   location_name: string;
   hub_city: string;
   google_business_status: string;
+  address?: string;
+  phone?: string;
   review_count: number;
   average_rating: number;
   nap_consistency_score: number;
@@ -283,30 +314,95 @@ export interface SeoLocalRanking {
   updated_at: string;
 }
 
-// 12. GEO (Generative Engine Optimization) Audits
+// Alias for backwards compatibility
+export type SeoLocalRanking = SeoLocalProfile;
+
+// 15. seo_geo_audits
 export interface SeoGeoAudit {
   id: string;
   organization_id: string;
   project_id: string;
   target_url: string;
   geo_score: number;
+  citation_score?: number;
+  authority_score: number;
+  structure_score: number;
+  answerability_score?: number;
   chatgpt_readiness: number;
   claude_readiness: number;
   gemini_readiness: number;
   perplexity_readiness: number;
+  google_aio_readiness?: number;
   citation_probability: number;
-  authority_score: number;
-  structure_score: number;
-  eeat_score: number;
-  ai_visibility_score: number;
+  eeat_score?: number;
+  ai_visibility_score?: number;
   missing_entities: string[];
   missing_citations: string[];
-  missing_schema: string[];
+  missing_schema?: string[];
   recommendations: string[];
   audited_at: string;
 }
 
-// 13. Recommendations
+// 16. seo_geo_citations
+export interface SeoGeoCitation {
+  id: string;
+  organization_id: string;
+  project_id: string;
+  engine: string;
+  query: string;
+  quotation_text: string;
+  cited_url: string;
+  is_verified: boolean;
+  evidence_score: number;
+  created_at: string;
+}
+
+// Alias for backwards compatibility
+export type SeoCitation = SeoGeoCitation;
+
+// 17. seo_reports
+export interface SeoReport {
+  id: string;
+  organization_id: string;
+  project_id: string;
+  report_type: 'executive_summary' | 'technical_audit' | 'keyword_universe' | 'geo_readiness' | 'backlink_profile';
+  title: string;
+  format: 'csv' | 'pdf' | 'json';
+  file_url?: string;
+  payload?: Record<string, any>;
+  generated_at: string;
+}
+
+// 18. seo_alerts
+export interface SeoAlert {
+  id: string;
+  organization_id: string;
+  project_id: string;
+  alert_type: 'ranking_drop' | 'geo_score_drop' | 'broken_link' | 'toxic_backlink' | 'competitor_spike';
+  severity: SeverityLevel;
+  title: string;
+  description: string;
+  status: 'active' | 'acknowledged' | 'resolved';
+  triggered_at: string;
+  resolved_at?: string;
+}
+
+// Additional Domain Models (Content Briefs, Automation Tasks, Trends, Scorecard)
+export interface SeoContentBrief {
+  id: string;
+  organization_id: string;
+  project_id: string;
+  target_topic: string;
+  target_intent: KeywordIntent;
+  target_word_count: number;
+  target_keywords: string[];
+  heading_outline: { heading: string; level: number; intent: string }[];
+  suggested_faqs: { question: string; answer_guideline: string }[];
+  internal_linking_suggestions: string[];
+  eeat_guidelines?: string;
+  created_at: string;
+}
+
 export interface SeoRecommendation {
   id: string;
   organization_id: string;
@@ -324,7 +420,6 @@ export interface SeoRecommendation {
   created_at: string;
 }
 
-// 14. Automation Tasks
 export interface SeoTask {
   id: string;
   organization_id: string;
@@ -338,7 +433,6 @@ export interface SeoTask {
   created_at: string;
 }
 
-// Historical & Trend Models
 export interface SeoTrendPoint {
   date: string;
   rankingAvg: number;
@@ -348,7 +442,6 @@ export interface SeoTrendPoint {
   backlinksCount: number;
 }
 
-// Executive Scorecard
 export interface SeoScorecard {
   healthScore: number;
   totalKeywords: number;
@@ -431,17 +524,4 @@ export interface SeoAiVisibility {
   cited_snippet?: string;
   source_url?: string;
   tracked_at: string;
-}
-
-export interface SeoCitation {
-  id: string;
-  organization_id: string;
-  project_id: string;
-  engine: string;
-  query: string;
-  quotation_text: string;
-  cited_url: string;
-  is_verified: boolean;
-  evidence_score: number;
-  created_at: string;
 }

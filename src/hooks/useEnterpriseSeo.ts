@@ -33,6 +33,9 @@ import type {
   SeoPagespeedReport,
   SeoAiVisibility,
   SeoCitation,
+  SeoBrokenLink,
+  SeoContentScore,
+  SeoAlert,
   KeywordIntent,
   SchemaEntityType
 } from "@/types/seo";
@@ -55,13 +58,16 @@ export function useEnterpriseSeo() {
   const [metaTags, setMetaTags] = useState<SeoMetaTag[]>([]);
   const [schemas, setSchemas] = useState<SeoSchema[]>([]);
   const [contentAnalysis, setContentAnalysis] = useState<SeoContentAnalysis[]>([]);
+  const [contentScores, setContentScores] = useState<SeoContentScore[]>([]);
   const [briefs, setBriefs] = useState<SeoContentBrief[]>([]);
   const [competitors, setCompetitors] = useState<SeoCompetitor[]>([]);
   const [contentGaps, setContentGaps] = useState<SeoContentGap[]>([]);
   const [backlinks, setBacklinks] = useState<SeoBacklink[]>([]);
+  const [brokenLinks, setBrokenLinks] = useState<SeoBrokenLink[]>([]);
   const [localRankings, setLocalRankings] = useState<SeoLocalRanking[]>([]);
   const [geoAudits, setGeoAudits] = useState<SeoGeoAudit[]>([]);
   const [tasks, setTasks] = useState<SeoTask[]>([]);
+  const [alerts, setAlerts] = useState<SeoAlert[]>([]);
   const [recommendations, setRecommendations] = useState<SeoRecommendation[]>([]);
   const [scorecard, setScorecard] = useState<SeoScorecard | null>(null);
   const [trendPoints, setTrendPoints] = useState<SeoTrendPoint[]>([]);
@@ -101,13 +107,16 @@ export function useEnterpriseSeo() {
           metas,
           schs,
           cas,
+          cscores,
           brfs,
           comps,
           gaps,
           bls,
+          blinks,
           locs,
           geos,
           tsks,
+          alts,
           recs,
           score,
           trends,
@@ -125,13 +134,16 @@ export function useEnterpriseSeo() {
           service.getMetaTags(pId),
           service.getSchemaMarkups(pId),
           service.getContentAnalysis(pId),
+          service.getContentScores(pId),
           service.getContentBriefs(pId),
           service.getCompetitors(pId),
           service.getContentGaps(pId),
           service.getBacklinks(pId),
+          service.getBrokenLinks(pId),
           service.getLocalRankings(pId),
           service.getGeoAudits(pId),
           service.getTasks(pId),
+          service.getAlerts(pId),
           service.getRecommendations(pId),
           service.getScorecard(pId),
           service.getTrendHistory(pId),
@@ -150,13 +162,16 @@ export function useEnterpriseSeo() {
         setMetaTags(metas);
         setSchemas(schs);
         setContentAnalysis(cas);
+        setContentScores(cscores);
         setBriefs(brfs);
         setCompetitors(comps);
         setContentGaps(gaps);
         setBacklinks(bls);
+        setBrokenLinks(blinks);
         setLocalRankings(locs);
         setGeoAudits(geos);
         setTasks(tsks);
+        setAlerts(alts);
         setRecommendations(recs);
         setScorecard(score);
         setTrendPoints(trends);
@@ -267,6 +282,48 @@ export function useEnterpriseSeo() {
     return added;
   };
 
+  const handleScanBrokenLinks = async () => {
+    if (!activeProject) return;
+    const result = await service.scanBrokenLinks(activeProject.id);
+    const updated = await service.getBrokenLinks(activeProject.id);
+    setBrokenLinks(updated);
+    return result;
+  };
+
+  const handleResolveBrokenLink = async (linkId: string) => {
+    await service.resolveBrokenLink(linkId);
+    setBrokenLinks(prev => prev.map(l => l.id === linkId ? { ...l, is_resolved: true, resolved_at: new Date().toISOString() } : l));
+  };
+
+  const handleOptimizeContentAI = async (pageUrl: string) => {
+    if (!activeProject) return;
+    const result = await service.optimizeContentAI(activeProject.id, pageUrl);
+    setContentScores(prev => {
+      const idx = prev.findIndex(c => c.page_url === pageUrl);
+      if (idx >= 0) {
+        const next = [...prev];
+        next[idx] = result;
+        return next;
+      }
+      return [result, ...prev];
+    });
+    setContentAnalysis(prev => {
+      const idx = prev.findIndex(c => c.page_url === pageUrl);
+      if (idx >= 0) {
+        const next = [...prev];
+        next[idx] = result;
+        return next;
+      }
+      return [result, ...prev];
+    });
+    return result;
+  };
+
+  const handleResolveAlert = async (alertId: string) => {
+    await service.resolveAlert(alertId);
+    setAlerts(prev => prev.map(a => a.id === alertId ? { ...a, is_resolved: true, resolved_at: new Date().toISOString() } : a));
+  };
+
   const handleRunGeoAudit = async (url?: string) => {
     if (!activeProject) return;
     const targetUrl = url || `https://${activeProject.domain}`;
@@ -319,13 +376,16 @@ export function useEnterpriseSeo() {
     metaTags,
     schemas,
     contentAnalysis,
+    contentScores,
     briefs,
     competitors,
     contentGaps,
     backlinks,
+    brokenLinks,
     localRankings,
     geoAudits,
     tasks,
+    alerts,
     recommendations,
     scorecard,
     trendPoints,
@@ -346,6 +406,10 @@ export function useEnterpriseSeo() {
     handleGenerateBrief,
     handleAddCompetitor,
     handleAddBacklink,
+    handleScanBrokenLinks,
+    handleResolveBrokenLink,
+    handleOptimizeContentAI,
+    handleResolveAlert,
     handleRunGeoAudit,
     handleCreateTask,
     handleRunTaskAction,

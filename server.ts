@@ -27,6 +27,7 @@ import { postgrestFetch, SupabaseRestError } from "./server/lib/supabaseRest.js"
 import { QueueManager } from "./server/queue/QueueManager.js";
 import { WorkerRegistry } from "./server/workers/WorkerRegistry.js";
 import { WorkerSupervisor } from "./server/workers/WorkerSupervisor.js";
+import { seoRoutes } from "./server/routes/seoRoutes.js";
 
 // OS-INTEGRATION-IMPLEMENTATION-01: extracted so a Vercel serverless entry point
 // (api/index.ts) can obtain the fully-configured Express app without also calling
@@ -70,6 +71,9 @@ export async function createApp() {
   app.get("/api/health", (req, res) => {
     res.json({ status: "ok" });
   });
+
+  // Enterprise SEO Intelligence Platform REST API surface
+  app.use("/api/seo", seoRoutes);
 
   // /api/v1/* — new versioned SDK surface. Additive only: no existing route below is
   // renamed or moved into this namespace. See
