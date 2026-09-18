@@ -62,7 +62,7 @@ export function CommunicationsPage() {
                 Organization Context
               </div>
               <p className="text-xs text-muted-foreground">
-                Digitex Studio tenant isolation & Supabase connection certified.
+                VyaparSethu root organization tenant isolation & Supabase connection certified.
               </p>
             </div>
           </div>

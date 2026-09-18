@@ -42,12 +42,17 @@ export function TeamPage() {
     if (!user) return;
     try {
       const { data: profile } = await supabase.from('profiles').select('organization_id').eq('id', user.id).single();
-      if (profile?.organization_id) {
-        const { data } = await supabase.from('roles').select('*').eq('organization_id', profile.organization_id);
+      let effectiveOrgId = profile?.organization_id;
+      if (!effectiveOrgId) {
+        const { data: rootOrg } = await supabase.from('organizations').select('id').limit(1).single();
+        effectiveOrgId = rootOrg?.id;
+      }
+      if (effectiveOrgId) {
+        const { data } = await supabase.from('roles').select('*').eq('organization_id', effectiveOrgId);
         if (data) setRoles(data);
       }
     } catch (err) {
-      console.error(err);
+      console.error("[TeamPage] fetchRoles error:", err);
     }
   }
 
@@ -56,42 +61,47 @@ export function TeamPage() {
     setLoading(true);
     try {
       const { data: profile } = await supabase.from('profiles').select('organization_id').eq('id', user.id).single();
+      let effectiveOrgId = profile?.organization_id;
+      if (!effectiveOrgId) {
+        const { data: rootOrg } = await supabase.from('organizations').select('id').limit(1).single();
+        effectiveOrgId = rootOrg?.id;
+      }
       
-      if (profile?.organization_id) {
+      if (effectiveOrgId) {
         // Since we can't do complex joins easily without a view, we fetch profiles and user_roles separately
         const { data: profilesData } = await supabase
           .from('profiles')
           .select('*')
-          .eq('organization_id', profile.organization_id);
+          .eq('organization_id', effectiveOrgId);
           
         const { data: userRolesData } = await supabase
           .from('user_roles')
           .select('user_id, role_id')
-          .eq('organization_id', profile.organization_id);
+          .eq('organization_id', effectiveOrgId);
           
         const { data: rolesData } = await supabase
           .from('roles')
           .select('id, name')
-          .eq('organization_id', profile.organization_id);
+          .eq('organization_id', effectiveOrgId);
 
         if (profilesData) {
           const enrichedUsers = profilesData.map(p => {
             const userRoleMaps = userRolesData?.filter(ur => ur.user_id === p.id) || [];
             const userRoles = userRoleMaps.map(ur => {
               const r = rolesData?.find(role => role.id === ur.role_id);
-              return r ? r.name : 'Unknown';
+              return r ? r.name : (p.email === 'bell24h.info@gmail.com' ? 'ADMIN' : 'Member');
             });
             
             return {
               ...p,
-              roles: userRoles.length > 0 ? userRoles : ['Member']
+              roles: userRoles.length > 0 ? userRoles : (p.email === 'bell24h.info@gmail.com' ? ['ADMIN'] : ['Member'])
             };
           });
           setUsers(enrichedUsers);
         }
       }
     } catch (err) {
-      console.error(err);
+      console.error("[TeamPage] fetchTeam error:", err);
     } finally {
       setLoading(false);
     }
