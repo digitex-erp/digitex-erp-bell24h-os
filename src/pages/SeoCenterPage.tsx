@@ -7,6 +7,7 @@
  */
 
 import { useState } from "react";
+import { useParams, useNavigate } from "react-router-dom";
 import { useEnterpriseSeo } from "@/hooks/useEnterpriseSeo";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -42,7 +43,37 @@ import {
 } from "lucide-react";
 import type { KeywordIntent, SchemaEntityType } from "@/types/seo";
 
+const SUBTAB_MAP: Record<string, string> = {
+  dashboard: "dashboard",
+  overview: "dashboard",
+  keywords: "keywords",
+  keyword: "keywords",
+  competitors: "competitors",
+  competitor: "competitors",
+  gaps: "competitors",
+  audit: "audit",
+  audits: "audit",
+  technical: "audit",
+  health: "audit",
+  ai_writer: "ai_writer",
+  "ai-writer": "ai_writer",
+  content: "ai_writer",
+  writer: "ai_writer",
+  schema: "schema",
+  schemas: "schema",
+  sitemaps: "schema",
+  links: "links",
+  backlinks: "links",
+  link: "links",
+  geo: "geo",
+  "ai-search": "geo",
+  aisearch: "geo",
+};
+
 export function SeoCenterPage() {
+  const { subtab } = useParams<{ subtab?: string }>();
+  const navigate = useNavigate();
+
   const {
     loading,
     projects,
@@ -75,8 +106,12 @@ export function SeoCenterPage() {
     handleSendToPlanner
   } = useEnterpriseSeo();
 
-  // Active UI tab
-  const [activeTab, setActiveTab] = useState("dashboard");
+  // Active UI tab derived from URL subtab
+  const activeTab = (subtab && SUBTAB_MAP[subtab.toLowerCase()]) || "dashboard";
+
+  const handleTabChange = (val: string) => {
+    navigate(`/seo/${val}`);
+  };
 
   // Keyword filter
   const [intentFilter, setIntentFilter] = useState<string>("all");
@@ -190,6 +225,16 @@ export function SeoCenterPage() {
     showNotification(`SEO Sourcing Lead synced directly into CRM Leads!`);
   };
 
+  const onDeleteKeywordClick = async (id: string, name: string) => {
+    await handleDeleteKeyword(id);
+    showNotification(`Keyword "${name}" removed from tracking.`);
+  };
+
+  const onResolveIssueClick = async (id: string) => {
+    await handleResolveIssue(id);
+    showNotification("Audit issue marked as resolved.");
+  };
+
   if (loading && !activeProject) {
     return (
       <div className="flex h-[75vh] flex-col items-center justify-center space-y-4">
@@ -209,7 +254,12 @@ export function SeoCenterPage() {
               <Globe className="h-6 w-6" />
             </div>
             <div>
-              <h1 className="text-2xl font-bold tracking-tight">Enterprise SEO Center v2.0</h1>
+              <div className="flex items-center gap-2">
+                <h1 className="text-2xl font-bold tracking-tight">Enterprise SEO Center v2.0</h1>
+                <Badge variant="outline" className="font-mono text-xs bg-muted/50">
+                  {activeProject?.domain || "bell24h.com"}
+                </Badge>
+              </div>
               <p className="text-sm text-muted-foreground">
                 Organic search intelligence, technical audits, JSON-LD schema, and Generative Engine Optimization (GEO)
               </p>
@@ -224,7 +274,15 @@ export function SeoCenterPage() {
             </Badge>
           )}
 
-          <Button variant="outline" size="sm" onClick={() => refresh()} className="gap-2">
+          <Button 
+            variant="outline" 
+            size="sm" 
+            onClick={async () => {
+              await refresh();
+              showNotification("SEO intelligence data refreshed.");
+            }} 
+            className="gap-2"
+          >
             <RefreshCw className="h-4 w-4" /> Refresh Data
           </Button>
 
@@ -235,7 +293,7 @@ export function SeoCenterPage() {
       </div>
 
       {/* Main Suite Tabs */}
-      <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
+      <Tabs value={activeTab} onValueChange={handleTabChange} className="space-y-6">
         <TabsList className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 h-auto p-1 bg-muted/60 rounded-xl gap-1">
           <TabsTrigger value="dashboard" className="gap-1.5 py-2.5 data-[state=active]:bg-background data-[state=active]:shadow-sm">
             <BarChart3 className="h-4 w-4" /> Overview
@@ -267,11 +325,17 @@ export function SeoCenterPage() {
         {/* TAB 1: OVERVIEW & DASHBOARD                                       */}
         {/* ================================================================= */}
         <TabsContent value="dashboard" className="space-y-6">
-          {/* KPI Grid */}
+          {/* KPI Grid - Clickable Navigation Cards */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            <Card className="border-l-4 border-l-emerald-500 shadow-sm">
+            <Card 
+              className="border-l-4 border-l-emerald-500 shadow-sm cursor-pointer hover:border-emerald-600 hover:shadow-md transition-all"
+              onClick={() => handleTabChange('audit')}
+            >
               <CardHeader className="pb-2">
-                <CardDescription className="text-xs uppercase font-semibold">Technical Health Score</CardDescription>
+                <div className="flex items-center justify-between">
+                  <CardDescription className="text-xs uppercase font-semibold">Technical Health Score</CardDescription>
+                  <Badge variant="outline" className="text-[10px] text-muted-foreground">View Audits &rarr;</Badge>
+                </div>
                 <CardTitle className="text-3xl font-bold flex items-center justify-between">
                   <span>{scorecard?.healthScore || 94}/100</span>
                   <Badge variant="outline" className="bg-emerald-50 text-emerald-700">Healthy</Badge>
@@ -282,9 +346,15 @@ export function SeoCenterPage() {
               </CardContent>
             </Card>
 
-            <Card className="border-l-4 border-l-blue-500 shadow-sm">
+            <Card 
+              className="border-l-4 border-l-blue-500 shadow-sm cursor-pointer hover:border-blue-600 hover:shadow-md transition-all"
+              onClick={() => handleTabChange('keywords')}
+            >
               <CardHeader className="pb-2">
-                <CardDescription className="text-xs uppercase font-semibold">Tracked Keywords</CardDescription>
+                <div className="flex items-center justify-between">
+                  <CardDescription className="text-xs uppercase font-semibold">Tracked Keywords</CardDescription>
+                  <Badge variant="outline" className="text-[10px] text-muted-foreground">View SERP &rarr;</Badge>
+                </div>
                 <CardTitle className="text-3xl font-bold flex items-center justify-between">
                   <span>{scorecard?.totalKeywords || 8}</span>
                   <span className="text-sm font-normal text-muted-foreground flex items-center text-emerald-600">
@@ -297,9 +367,15 @@ export function SeoCenterPage() {
               </CardContent>
             </Card>
 
-            <Card className="border-l-4 border-l-purple-500 shadow-sm">
+            <Card 
+              className="border-l-4 border-l-purple-500 shadow-sm cursor-pointer hover:border-purple-600 hover:shadow-md transition-all"
+              onClick={() => handleTabChange('links')}
+            >
               <CardHeader className="pb-2">
-                <CardDescription className="text-xs uppercase font-semibold">Backlink Authority</CardDescription>
+                <div className="flex items-center justify-between">
+                  <CardDescription className="text-xs uppercase font-semibold">Backlink Authority</CardDescription>
+                  <Badge variant="outline" className="text-[10px] text-muted-foreground">View Links &rarr;</Badge>
+                </div>
                 <CardTitle className="text-3xl font-bold flex items-center justify-between">
                   <span>{scorecard?.totalBacklinks || 480}</span>
                   <Badge variant="outline" className="bg-purple-50 text-purple-700">DA 74</Badge>
@@ -310,9 +386,15 @@ export function SeoCenterPage() {
               </CardContent>
             </Card>
 
-            <Card className="border-l-4 border-l-amber-500 shadow-sm">
+            <Card 
+              className="border-l-4 border-l-amber-500 shadow-sm cursor-pointer hover:border-amber-600 hover:shadow-md transition-all"
+              onClick={() => handleTabChange('geo')}
+            >
               <CardHeader className="pb-2">
-                <CardDescription className="text-xs uppercase font-semibold">AI / GEO Visibility</CardDescription>
+                <div className="flex items-center justify-between">
+                  <CardDescription className="text-xs uppercase font-semibold">AI / GEO Visibility</CardDescription>
+                  <Badge variant="outline" className="text-[10px] text-muted-foreground">View Citations &rarr;</Badge>
+                </div>
                 <CardTitle className="text-3xl font-bold flex items-center justify-between">
                   <span>{scorecard?.aiVisibilityScore || 88}%</span>
                   <Badge variant="outline" className="bg-amber-50 text-amber-700">Top 3 Citations</Badge>
@@ -469,7 +551,7 @@ export function SeoCenterPage() {
                             size="sm" 
                             variant="ghost" 
                             className="h-8 w-8 p-0 text-red-500 hover:text-red-700" 
-                            onClick={() => handleDeleteKeyword(kw.id)}
+                            onClick={() => onDeleteKeywordClick(kw.id, kw.keyword)}
                           >
                             <Trash2 className="h-4 w-4" />
                           </Button>
@@ -630,7 +712,7 @@ export function SeoCenterPage() {
                       size="sm" 
                       variant={iss.is_resolved ? "secondary" : "outline"} 
                       disabled={iss.is_resolved}
-                      onClick={() => handleResolveIssue(iss.id)}
+                      onClick={() => onResolveIssueClick(iss.id)}
                     >
                       {iss.is_resolved ? "Resolved" : "Mark Resolved"}
                     </Button>

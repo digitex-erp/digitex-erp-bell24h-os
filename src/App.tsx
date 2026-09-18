@@ -90,7 +90,9 @@ export default function App() {
           <Route path="job-orchestrator" element={<JobOrchestratorPage />} />
           <Route path="context-profiles" element={<ContextProfileManagerPage />} />
           <Route path="seo" element={<SeoCenterPage />} />
+          <Route path="seo/:subtab" element={<SeoCenterPage />} />
           <Route path="seo-intelligence" element={<Navigate to="/seo" replace />} />
+          <Route path="seo-intelligence/:subtab" element={<Navigate to="/seo" replace />} />
           <Route path="campaigns" element={<CampaignDashboardPage />} />
           <Route path="campaigns/builder" element={<CampaignBuilderPage />} />
           <Route path="media-composer" element={<MediaComposerDashboardPage />} />

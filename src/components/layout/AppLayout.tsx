@@ -213,7 +213,7 @@ export function AppLayout() {
               to={item.href}
               className={cn(
                 "group flex items-center rounded-md px-3 py-2 text-sm font-medium hover:bg-accent hover:text-accent-foreground",
-                location.pathname === item.href
+                (location.pathname === item.href || (item.href !== "/" && location.pathname.startsWith(item.href + "/")))
                   ? "bg-accent text-accent-foreground"
                   : "text-muted-foreground"
               )}

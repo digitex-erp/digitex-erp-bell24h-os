@@ -56,16 +56,22 @@ export function useEnterpriseSeo() {
 
   const service = EnterpriseSeoService.getInstance();
 
+  const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
+
   // Load active project & all data
-  const loadAllData = useCallback(async () => {
+  const loadAllData = useCallback(async (forcedProjectId?: string) => {
     try {
       setLoading(true);
       setError(null);
       const projs = await service.getProjects();
       setProjects(projs);
       
-      const currentProj = activeProject || projs[0] || null;
+      const effectiveId = forcedProjectId || activeProjectId || (projs[0] ? projs[0].id : null);
+      const currentProj = projs.find(p => p.id === effectiveId) || projs[0] || null;
       setActiveProject(currentProj);
+      if (currentProj && currentProj.id !== activeProjectId) {
+        setActiveProjectId(currentProj.id);
+      }
 
       if (currentProj) {
         const pId = currentProj.id;
@@ -125,7 +131,7 @@ export function useEnterpriseSeo() {
     } finally {
       setLoading(false);
     }
-  }, [activeProject]);
+  }, [activeProjectId]);
 
   useEffect(() => {
     loadAllData();
