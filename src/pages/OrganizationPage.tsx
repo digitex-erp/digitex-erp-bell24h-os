@@ -26,40 +26,78 @@ export function OrganizationPage() {
   async function fetchOrganization() {
     if (!user) return;
     try {
-      // Get the profile to find org_id
+      setLoading(true);
+      // 1. Check user profile for organization_id
       const { data: profile } = await supabase
         .from('profiles')
         .select('organization_id')
         .eq('id', user.id)
         .single();
         
-      if (profile?.organization_id) {
-        const { data: orgData } = await supabase
+      let orgData: any = null;
+      let effectiveOrgId = profile?.organization_id;
+
+      if (effectiveOrgId) {
+        const { data } = await supabase
           .from('organizations')
           .select('*')
-          .eq('id', profile.organization_id)
+          .eq('id', effectiveOrgId)
           .single();
+        orgData = data;
+      }
+
+      // 2. Single root organization fallback for Bell24h-OS internal architecture
+      if (!orgData) {
+        const { data: rootOrg } = await supabase
+          .from('organizations')
+          .select('*')
+          .limit(1)
+          .single();
+        if (rootOrg) {
+          orgData = rootOrg;
+          effectiveOrgId = rootOrg.id;
+          // Self-heal profile link to root organization if detached
+          if (!profile?.organization_id) {
+            await supabase.from('profiles').update({ organization_id: rootOrg.id }).eq('id', user.id);
+          }
+        }
+      }
+
+      if (orgData) {
+        if (!orgData.addresses) orgData.addresses = {};
+        if (!orgData.settings) orgData.settings = {};
+        setOrg(orgData);
+        
+        // 3. Fetch team members with organization membership and profile details
+        const { data: memberData } = await supabase
+          .from('profiles')
+          .select('id, email, first_name, last_name, is_active, designation, department')
+          .eq('organization_id', effectiveOrgId);
           
-        if (orgData) {
-          if (!orgData.addresses) orgData.addresses = {};
-          if (!orgData.settings) orgData.settings = {};
-          setOrg(orgData);
+        if (memberData) {
+          // Fetch roles for members
+          const { data: userRoles } = await supabase
+            .from('user_roles')
+            .select('user_id, roles(name)');
           
-          // Fetch members
-          const { data: memberData } = await supabase
-            .from('profiles')
-            .select('id, email, first_name, last_name, is_active')
-            .eq('organization_id', profile.organization_id);
-            
-          if (memberData) setMembers(memberData);
+          const roleMap = new Map<string, string>();
+          (userRoles || []).forEach((ur: any) => {
+            const roleName = Array.isArray(ur.roles) ? ur.roles[0]?.name : ur.roles?.name;
+            if (roleName) roleMap.set(ur.user_id, roleName);
+          });
+
+          const enrichedMembers = memberData.map(m => ({
+            ...m,
+            role: roleMap.get(m.id) || (m.email === 'bell24h.info@gmail.com' ? 'ADMIN' : 'VIEWER')
+          }));
+
+          setMembers(enrichedMembers);
         }
       } else {
-        // If user has no organization_id, we might need to handle it or create one.
-        // For testing, let's say they have no organization yet.
         setOrg(null);
       }
     } catch (err) {
-      console.error(err);
+      console.error("[OrganizationPage] fetch error:", err);
     } finally {
       setLoading(false);
     }
@@ -411,12 +449,14 @@ export function OrganizationPage() {
           <Card>
             <CardHeader className="flex flex-row items-center justify-between">
               <div>
-                <CardTitle>Team Members</CardTitle>
+                <CardTitle>Enterprise Team & Autonomous Fleet</CardTitle>
                 <CardDescription>
-                  Manage who has access to your organization.
+                  Active operators and autonomous agents attached to the VyaparSethu root organization.
                 </CardDescription>
               </div>
-              <Button>Invite Member</Button>
+              <span className="text-xs font-semibold px-3 py-1 rounded-full bg-primary/10 text-primary border border-primary/20">
+                Internal OS Roster
+              </span>
             </CardHeader>
             <CardContent>
               <div className="border rounded-md divide-y">
@@ -427,11 +467,25 @@ export function OrganizationPage() {
                         {member.first_name ? member.first_name[0] : member.email[0].toUpperCase()}
                       </div>
                       <div>
-                        <div className="font-medium">{member.first_name} {member.last_name}</div>
-                        <div className="text-sm text-muted-foreground">{member.email}</div>
+                        <div className="font-medium flex items-center gap-2">
+                          {member.first_name ? `${member.first_name} ${member.last_name || ''}` : member.email}
+                          {member.email === 'bell24h.info@gmail.com' && (
+                            <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-amber-500/10 text-amber-500 border border-amber-500/20">
+                              Owner / Super Admin
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-xs text-muted-foreground flex items-center gap-2 mt-0.5">
+                          <span>{member.email}</span>
+                          {member.designation && <span>• {member.designation}</span>}
+                          {member.department && <span>• {member.department}</span>}
+                        </div>
                       </div>
                     </div>
-                    <div className="flex items-center gap-4">
+                    <div className="flex items-center gap-3">
+                      <span className="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold bg-primary/10 text-primary border border-primary/20">
+                        {member.role || 'ADMIN'}
+                      </span>
                       {member.is_active ? (
                         <span className="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold bg-emerald-500/10 text-emerald-500">
                           Active
@@ -441,7 +495,6 @@ export function OrganizationPage() {
                           Inactive
                         </span>
                       )}
-                      <Button variant="ghost" size="sm">Manage</Button>
                     </div>
                   </div>
                 ))}
@@ -453,42 +506,46 @@ export function OrganizationPage() {
         <TabsContent value="subscription" className="space-y-6">
           <Card>
             <CardHeader>
-              <CardTitle>Subscription Plan</CardTitle>
+              <CardTitle>Enterprise Operating License</CardTitle>
               <CardDescription>
-                Manage your billing and plan limits.
+                Bell24h-OS Internal Operating System Instance & Resource Allocation.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between p-6 border rounded-lg bg-card/50 gap-4">
                 <div>
-                  <h3 className="text-2xl font-bold uppercase">{org.plan || 'FREE'} PLAN</h3>
+                  <div className="inline-flex items-center gap-2 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-500 mb-2">
+                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                    Operational & Certified
+                  </div>
+                  <h3 className="text-2xl font-bold tracking-tight">BELL24H-OS ROOT ENTERPRISE TIER</h3>
                   <p className="text-muted-foreground mt-1">
-                    Your plan is currently active.
+                    Internal single-tenant instance for VyaparSethu. Unlimited internal seats & autonomous agents.
                   </p>
                 </div>
-                <Button variant="outline">Upgrade Plan</Button>
+                <div className="text-right">
+                  <span className="text-xs uppercase tracking-wider text-muted-foreground block">Instance Mode</span>
+                  <span className="text-sm font-semibold text-primary">Private Internal Operating System</span>
+                </div>
               </div>
               
               <div className="space-y-4">
-                <h4 className="font-medium">Current Usage</h4>
-                <div className="space-y-6">
-                  <div className="space-y-2">
-                    <div className="flex justify-between text-sm">
-                      <span>Users (3/5)</span>
-                      <span className="text-muted-foreground">60%</span>
-                    </div>
-                    <div className="h-2 w-full bg-secondary rounded-full overflow-hidden">
-                      <div className="h-full bg-primary w-[60%]" />
-                    </div>
+                <h4 className="font-medium text-sm text-muted-foreground uppercase tracking-wider">Allocated System Quotas</h4>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div className="p-4 border rounded-lg bg-card/30">
+                    <div className="text-xs text-muted-foreground">Internal Users & Operators</div>
+                    <div className="text-xl font-bold mt-1 text-emerald-500">Uncapped</div>
+                    <div className="text-xs text-muted-foreground mt-1">Zero SaaS seat restrictions</div>
                   </div>
-                  <div className="space-y-2">
-                    <div className="flex justify-between text-sm">
-                      <span>Storage (2GB/10GB)</span>
-                      <span className="text-muted-foreground">20%</span>
-                    </div>
-                    <div className="h-2 w-full bg-secondary rounded-full overflow-hidden">
-                      <div className="h-full bg-primary w-[20%]" />
-                    </div>
+                  <div className="p-4 border rounded-lg bg-card/30">
+                    <div className="text-xs text-muted-foreground">Autonomous Worker Fleet</div>
+                    <div className="text-xl font-bold mt-1 text-emerald-500">Uncapped</div>
+                    <div className="text-xs text-muted-foreground mt-1">Claude, Codex & Cowork agents</div>
+                  </div>
+                  <div className="p-4 border rounded-lg bg-card/30">
+                    <div className="text-xs text-muted-foreground">PostgreSQL & Storage</div>
+                    <div className="text-xl font-bold mt-1 text-emerald-500">Enterprise Dedicated</div>
+                    <div className="text-xs text-muted-foreground mt-1">Supabase ap-southeast-2</div>
                   </div>
                 </div>
               </div>

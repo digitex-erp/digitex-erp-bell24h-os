@@ -18,18 +18,27 @@ export function DashboardPage() {
       try {
         setLoading(true);
         const { data: profile } = await supabase.from('profiles').select('organization_id').eq('id', user.id).single();
+        let effectiveOrgId = profile?.organization_id;
         
-        if (profile?.organization_id) {
-          const { data: orgData } = await supabase.from('organizations').select('name').eq('id', profile.organization_id).single();
+        if (!effectiveOrgId) {
+          const { data: rootOrg } = await supabase.from('organizations').select('id, name').limit(1).single();
+          if (rootOrg) {
+            effectiveOrgId = rootOrg.id;
+            setOrgName(rootOrg.name);
+          }
+        }
+        
+        if (effectiveOrgId) {
+          const { data: orgData } = await supabase.from('organizations').select('name').eq('id', effectiveOrgId).single();
           if (orgData) setOrgName(orgData.name);
 
-          const { count: users } = await supabase.from('profiles').select('*', { count: 'exact', head: true }).eq('organization_id', profile.organization_id);
+          const { count: users } = await supabase.from('profiles').select('*', { count: 'exact', head: true }).eq('organization_id', effectiveOrgId);
           if (users !== null) setUserCount(users);
 
-          const { count: activeUsers } = await supabase.from('profiles').select('*', { count: 'exact', head: true }).eq('organization_id', profile.organization_id).eq('is_active', true);
+          const { count: activeUsers } = await supabase.from('profiles').select('*', { count: 'exact', head: true }).eq('organization_id', effectiveOrgId).eq('is_active', true);
           if (activeUsers !== null) setActiveUserCount(activeUsers);
           
-          const { count: roles } = await supabase.from('roles').select('*', { count: 'exact', head: true }).eq('organization_id', profile.organization_id);
+          const { count: roles } = await supabase.from('roles').select('*', { count: 'exact', head: true }).eq('organization_id', effectiveOrgId);
           if (roles !== null) setRoleCount(roles);
         }
       } catch (err) {

@@ -142,10 +142,20 @@ export function AppLayout() {
   useEffect(() => {
     async function fetchOrg() {
       if (!user) return;
-      const { data: profile } = await supabase.from('profiles').select('organization_id').eq('id', user.id).single();
-      if (profile?.organization_id) {
-        const { data: orgData } = await supabase.from('organizations').select('id, name').eq('id', profile.organization_id).single();
+      try {
+        const { data: profile } = await supabase.from('profiles').select('organization_id').eq('id', user.id).single();
+        let orgData = null;
+        if (profile?.organization_id) {
+          const { data } = await supabase.from('organizations').select('id, name').eq('id', profile.organization_id).single();
+          orgData = data;
+        }
+        if (!orgData) {
+          const { data: rootOrg } = await supabase.from('organizations').select('id, name').limit(1).single();
+          orgData = rootOrg;
+        }
         if (orgData) setOrg(orgData);
+      } catch (err) {
+        console.warn("[AppLayout] Failed to load root organization:", err);
       }
     }
     fetchOrg();
@@ -172,35 +182,31 @@ export function AppLayout() {
           </div>
         </div>
 
-        {/* Workspace Switcher Placeholder */}
+        {/* Organization Workspace Switcher */}
         <div className="p-4">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="outline" className="w-full justify-between px-3">
                 <div className="flex items-center gap-2">
                   <Avatar className="h-5 w-5">
-                    <AvatarFallback>{org?.name ? org.name.substring(0,2).toUpperCase() : 'NO'}</AvatarFallback>
+                    <AvatarFallback>{org?.name ? org.name.substring(0,2).toUpperCase() : 'VS'}</AvatarFallback>
                   </Avatar>
-                  <span className="truncate">{org?.name || "No Organization"}</span>
+                  <span className="truncate">{org?.name || "VyaparSethu"}</span>
                 </div>
                 <ChevronsUpDown className="h-4 w-4 shrink-0 opacity-50" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent className="w-56" align="start">
-              <DropdownMenuLabel>Workspaces</DropdownMenuLabel>
+              <DropdownMenuLabel>Root Enterprise Workspace</DropdownMenuLabel>
               <DropdownMenuSeparator />
               <DropdownMenuItem>
                 <div className="flex items-center gap-2 w-full">
                   <Avatar className="h-5 w-5">
-                    <AvatarFallback>{org?.name ? org.name.substring(0,2).toUpperCase() : 'NO'}</AvatarFallback>
+                    <AvatarFallback>{org?.name ? org.name.substring(0,2).toUpperCase() : 'VS'}</AvatarFallback>
                   </Avatar>
-                  <span className="flex-1 truncate">{org?.name || "No Organization"}</span>
-                  <Check className="h-4 w-4 opacity-50" />
+                  <span className="flex-1 truncate font-medium">{org?.name || "VyaparSethu"}</span>
+                  <Check className="h-4 w-4 text-emerald-500" />
                 </div>
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem>
-                <span className="text-muted-foreground">+ Create Workspace</span>
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
