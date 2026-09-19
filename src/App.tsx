@@ -16,6 +16,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { OrganizationPage } from "@/pages/OrganizationPage";
 import { TeamPage } from "@/pages/TeamPage";
 import { AiProvidersPage } from "@/pages/AiProvidersPage";
+import { AiRouterDashboardPage } from "@/pages/AiRouterDashboardPage";
 import { PromptStudioPage } from "@/pages/PromptStudioPage";
 import { ContentPlannerPage } from "@/pages/ContentPlannerPage";
 import { ImageStudioPage } from "@/pages/ImageStudioPage";
@@ -83,6 +84,7 @@ export default function App() {
           <Route path="organization" element={<OrganizationPage />} />
           <Route path="team" element={<TeamPage />} />
           <Route path="ai-providers" element={<AiProvidersPage />} />
+          <Route path="ai-router" element={<AiRouterDashboardPage />} />
           <Route path="prompt-studio" element={<PromptStudioPage />} />
           <Route path="content-planner" element={<ContentPlannerPage />} />
           <Route path="image-studio" element={<ImageStudioPage />} />

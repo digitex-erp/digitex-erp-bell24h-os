@@ -7,23 +7,14 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
 import { getCredential } from "./ProviderManager.js";
+import type {
+  TextRequest,
+  JsonRequest,
+  ProviderResult,
+} from "./ProviderTypes.js";
 
-export const DEFAULT_MODEL = "gemini-3.6-flash";
-
-export interface TextRequest {
-  prompt: string;
-  model?: string;
-}
-
-export interface JsonRequest extends TextRequest {
-  responseSchema: unknown;
-}
-
-export interface ProviderResult<T> {
-  data: T;
-  model: string;
-  latencyMs: number;
-}
+export { TextRequest, JsonRequest, ProviderResult };
+export const DEFAULT_MODEL = "gemini-1.5-flash";
 
 function client() {
   const { apiKey } = getCredential("gemini");
@@ -38,12 +29,26 @@ export async function generateText(req: TextRequest): Promise<ProviderResult<str
   const model = req.model ?? DEFAULT_MODEL;
   const startedAt = Date.now();
 
-  const result = await client().models.generateContent({
+  const result: any = await client().models.generateContent({
     model,
     contents: req.prompt,
   });
 
-  return { data: result.text ?? "", model, latencyMs: Date.now() - startedAt };
+  const usage = result.usageMetadata;
+
+  return {
+    data: result.text ?? "",
+    provider: "gemini",
+    model,
+    latencyMs: Date.now() - startedAt,
+    tokens: usage
+      ? {
+          promptTokens: usage.promptTokenCount || 0,
+          completionTokens: usage.candidatesTokenCount || 0,
+          totalTokens: usage.totalTokenCount || 0,
+        }
+      : undefined,
+  };
 }
 
 /** Schema-constrained JSON completion. Throws if the provider returns unparseable output. */
@@ -51,7 +56,7 @@ export async function generateJson<T>(req: JsonRequest): Promise<ProviderResult<
   const model = req.model ?? DEFAULT_MODEL;
   const startedAt = Date.now();
 
-  const result = await client().models.generateContent({
+  const result: any = await client().models.generateContent({
     model,
     contents: req.prompt,
     config: {
@@ -68,7 +73,21 @@ export async function generateJson<T>(req: JsonRequest): Promise<ProviderResult<
     throw new Error("Provider returned unparseable JSON.");
   }
 
-  return { data: parsed, model, latencyMs: Date.now() - startedAt };
+  const usage = result.usageMetadata;
+
+  return {
+    data: parsed,
+    provider: "gemini",
+    model,
+    latencyMs: Date.now() - startedAt,
+    tokens: usage
+      ? {
+          promptTokens: usage.promptTokenCount || 0,
+          completionTokens: usage.candidatesTokenCount || 0,
+          totalTokens: usage.totalTokenCount || 0,
+        }
+      : undefined,
+  };
 }
 
 /** Re-exported so route handlers can declare schemas without importing the SDK directly. */

@@ -12,7 +12,26 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Search, Plus, Play, History, Star, Edit, Trash2, Library, Wand2, TerminalSquare, Heart, Activity } from "lucide-react";
+import { 
+  Search, 
+  Plus, 
+  Play, 
+  History, 
+  Star, 
+  Edit, 
+  Trash2, 
+  Library, 
+  Wand2, 
+  TerminalSquare, 
+  Heart, 
+  Activity,
+  GitCompare,
+  Copy,
+  Check,
+  Clock,
+  Coins,
+  Sparkles
+} from "lucide-react";
 
 export function PromptStudioPage() {
   const { user } = useAuthStore();
@@ -53,6 +72,122 @@ export function PromptStudioPage() {
   const [playgroundResponse, setPlaygroundResponse] = useState("");
   const [playgroundTesting, setPlaygroundTesting] = useState(false);
   const [playgroundLatency, setPlaygroundLatency] = useState(0);
+
+  // Multi-Model Compare state
+  const [comparePrompt, setComparePrompt] = useState(
+    "Generate a compelling 3-point value proposition for our enterprise B2B platform emphasizing security, speed, and multi-model flexibility."
+  );
+  const [compareProviders, setCompareProviders] = useState<string[]>(["nvidia", "deepseek", "qwen"]);
+  const [compareRunning, setCompareRunning] = useState(false);
+  const [compareResults, setCompareResults] = useState<
+    Record<
+      string,
+      {
+        loading: boolean;
+        text?: string;
+        latencyMs?: number;
+        tokens?: number;
+        model?: string;
+        error?: string;
+      }
+    >
+  >({});
+  const [copiedProvider, setCopiedProvider] = useState<string | null>(null);
+
+  const availableCompareProviders = [
+    { id: "gemini", name: "Google Gemini", model: "gemini-2.5-flash" },
+    { id: "nvidia", name: "NVIDIA NIM", model: "meta/llama-3.3-70b-instruct" },
+    { id: "deepseek", name: "DeepSeek", model: "deepseek-chat" },
+    { id: "qwen", name: "Alibaba Qwen", model: "qwen-plus" },
+    { id: "glm", name: "Zhipu GLM", model: "glm-4-flash" },
+    { id: "minimax", name: "MiniMax", model: "MiniMax-Text-01" },
+  ];
+
+  const handleToggleCompareProvider = (id: string) => {
+    if (compareProviders.includes(id)) {
+      if (compareProviders.length > 1) {
+        setCompareProviders(compareProviders.filter(p => p !== id));
+      }
+    } else {
+      if (compareProviders.length < 3) {
+        setCompareProviders([...compareProviders, id]);
+      }
+    }
+  };
+
+  const handleRunComparison = async () => {
+    if (!comparePrompt.trim() || compareProviders.length === 0) return;
+    setCompareRunning(true);
+    
+    const initial: typeof compareResults = {};
+    for (const p of compareProviders) {
+      initial[p] = { loading: true };
+    }
+    setCompareResults(initial);
+
+    let sessionToken: string | undefined;
+    try {
+      const { data } = await supabase.auth.getSession();
+      sessionToken = data?.session?.access_token;
+    } catch {
+      // ignore
+    }
+
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (sessionToken) headers["Authorization"] = `Bearer ${sessionToken}`;
+
+    await Promise.all(
+      compareProviders.map(async (providerId) => {
+        try {
+          const res = await fetch("/api/v1/ai-router/route", {
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+              prompt: comparePrompt,
+              preferredProvider: providerId,
+              policy: "balanced",
+            }),
+          });
+          const data = await res.json();
+          if (!res.ok || !data.success) {
+            setCompareResults(prev => ({
+              ...prev,
+              [providerId]: {
+                loading: false,
+                error: data.error || "Generation failed",
+              }
+            }));
+          } else {
+            setCompareResults(prev => ({
+              ...prev,
+              [providerId]: {
+                loading: false,
+                text: data.execution?.text || "No response text received",
+                latencyMs: data.execution?.latencyMs || 0,
+                tokens: data.execution?.tokens?.totalTokens || data.execution?.tokens || 0,
+                model: data.execution?.model || data.simulation?.selectedProvider || providerId,
+              }
+            }));
+          }
+        } catch (err: any) {
+          setCompareResults(prev => ({
+            ...prev,
+            [providerId]: {
+              loading: false,
+              error: err.message || String(err),
+            }
+          }));
+        }
+      })
+    );
+    setCompareRunning(false);
+  };
+
+  const handleCopyComparisonText = (providerId: string, text: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedProvider(providerId);
+    setTimeout(() => setCopiedProvider(null), 2000);
+  };
 
   const defaultCategories = [
     "SEO", "Blog", "LinkedIn", "Twitter/X", "Facebook", "Instagram", 
@@ -266,8 +401,9 @@ export function PromptStudioPage() {
       </div>
 
       <Tabs defaultValue="library" className="w-full">
-        <TabsList className="grid w-full sm:w-auto grid-cols-2 mb-4">
+        <TabsList className="grid w-full sm:w-auto grid-cols-3 mb-4">
           <TabsTrigger value="library"><Library className="h-4 w-4 mr-2"/> Library</TabsTrigger>
+          <TabsTrigger value="compare"><GitCompare className="h-4 w-4 mr-2"/> Multi-Model Compare</TabsTrigger>
           <TabsTrigger value="logs"><History className="h-4 w-4 mr-2"/> Executions</TabsTrigger>
         </TabsList>
         
@@ -419,6 +555,155 @@ export function PromptStudioPage() {
               </div>
             </CardContent>
           </Card>
+        </TabsContent>
+
+        <TabsContent value="compare" className="space-y-4">
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="flex items-center gap-2">
+                    <Sparkles className="h-5 w-5 text-primary" />
+                    Multi-Model Parallel Evaluation
+                  </CardTitle>
+                  <CardDescription>
+                    Benchmark up to 3 models side-by-side using the same prompt to evaluate latency, tokens, and output fidelity.
+                  </CardDescription>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="space-y-2">
+                <Label>Evaluation Prompt</Label>
+                <Textarea
+                  rows={3}
+                  value={comparePrompt}
+                  onChange={(e) => setComparePrompt(e.target.value)}
+                  placeholder="Enter a prompt to dispatch across models simultaneously..."
+                />
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <Label className="text-xs uppercase text-muted-foreground font-semibold">
+                    Select Providers to Compare (Max 3, Minimum 1)
+                  </Label>
+                  <span className="text-xs text-muted-foreground">
+                    Selected: {compareProviders.length} / 3
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {availableCompareProviders.map((p) => {
+                    const isSelected = compareProviders.includes(p.id);
+                    return (
+                      <Button
+                        key={p.id}
+                        type="button"
+                        variant={isSelected ? "default" : "outline"}
+                        size="sm"
+                        onClick={() => handleToggleCompareProvider(p.id)}
+                        className="text-xs h-8"
+                      >
+                        {isSelected && <Check className="h-3 w-3 mr-1" />}
+                        {p.name}
+                        <span className="ml-1 text-[10px] opacity-70 font-mono">({p.model})</span>
+                      </Button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="flex justify-end pt-2">
+                <Button
+                  onClick={handleRunComparison}
+                  disabled={compareRunning || !comparePrompt.trim() || compareProviders.length === 0}
+                  className="flex items-center gap-2"
+                >
+                  <Play className={`h-4 w-4 ${compareRunning ? "animate-spin" : ""}`} />
+                  {compareRunning ? "Executing Multi-Model Run..." : "Run Multi-Model Comparison"}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Results Grid */}
+          <div className={`grid gap-4 ${
+            compareProviders.length === 1 ? "grid-cols-1" :
+            compareProviders.length === 2 ? "grid-cols-1 md:grid-cols-2" :
+            "grid-cols-1 md:grid-cols-3"
+          }`}>
+            {compareProviders.map((provId) => {
+              const info = availableCompareProviders.find(p => p.id === provId);
+              const result = compareResults[provId];
+              const isCopied = copiedProvider === provId;
+
+              return (
+                <Card key={provId} className="flex flex-col justify-between">
+                  <CardHeader className="pb-3 border-b">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <CardTitle className="text-base">{info?.name || provId}</CardTitle>
+                        <CardDescription className="text-xs font-mono">{info?.model}</CardDescription>
+                      </div>
+                      <Badge variant="outline" className="font-mono text-xs uppercase">
+                        {provId}
+                      </Badge>
+                    </div>
+
+                    {result && !result.loading && !result.error && (
+                      <div className="flex items-center gap-3 pt-2 text-xs text-muted-foreground">
+                        <span className="flex items-center gap-1 font-mono">
+                          <Clock className="h-3.5 w-3.5 text-primary" />
+                          {result.latencyMs}ms
+                        </span>
+                        {result.tokens !== undefined && (
+                          <span className="flex items-center gap-1 font-mono">
+                            <Coins className="h-3.5 w-3.5 text-amber-500" />
+                            {result.tokens} tokens
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </CardHeader>
+
+                  <CardContent className="pt-4 flex-1">
+                    {!result ? (
+                      <div className="py-12 text-center text-xs text-muted-foreground">
+                        Ready to execute comparison.
+                      </div>
+                    ) : result.loading ? (
+                      <div className="py-12 flex flex-col items-center justify-center gap-2 text-muted-foreground text-xs">
+                        <Activity className="h-5 w-5 animate-spin text-primary" />
+                        <span>Streaming from {info?.name}...</span>
+                      </div>
+                    ) : result.error ? (
+                      <div className="p-3 bg-destructive/10 border border-destructive/20 rounded-md text-destructive text-xs">
+                        <span className="font-semibold">Execution Error:</span> {result.error}
+                      </div>
+                    ) : (
+                      <div className="text-sm font-sans whitespace-pre-wrap leading-relaxed max-h-[420px] overflow-y-auto pr-1">
+                        {result.text}
+                      </div>
+                    )}
+                  </CardContent>
+
+                  {result?.text && (
+                    <CardFooter className="pt-2 border-t flex justify-end">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleCopyComparisonText(provId, result.text!)}
+                        className="text-xs h-7 flex items-center gap-1"
+                      >
+                        {isCopied ? <Check className="h-3 w-3 text-green-500" /> : <Copy className="h-3 w-3" />}
+                        {isCopied ? "Copied" : "Copy Output"}
+                      </Button>
+                    </CardFooter>
+                  )}
+                </Card>
+              );
+            })}
+          </div>
         </TabsContent>
       </Tabs>
 

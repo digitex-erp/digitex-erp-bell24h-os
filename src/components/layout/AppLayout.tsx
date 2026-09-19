@@ -14,6 +14,7 @@ import {
   LogOut,
   Building,
   BrainCircuit,
+  Cpu,
   TerminalSquare,
   FileText,
   Image as ImageIcon,
@@ -63,6 +64,11 @@ const sidebarNavItems = [
     title: "AI Providers",
     href: "/ai-providers",
     icon: BrainCircuit,
+  },
+  {
+    title: "AI Router",
+    href: "/ai-router",
+    icon: Cpu,
   },
   {
     title: "Prompt Studio",

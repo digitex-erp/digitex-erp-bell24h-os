@@ -97,20 +97,28 @@ export async function createApp() {
   // not a tenant mapping. See OS_INTEGRATION_DECISION_RECORD_V1.md Decisions A/B.
   app.post("/api/v1/ai/text", requireServiceAuth, async (req, res) => {
     const { serviceCaller, requestId } = req as ServiceAuthedRequest;
-    const { prompt, provider } = req.body ?? {};
+    const { prompt, provider, policy, workflowType, temperature, maxTokens } = req.body ?? {};
 
     if (typeof prompt !== "string" || prompt.trim().length === 0) {
       return sendError(res, 400, "VALIDATION_FAILED", requestId!, "prompt is required");
     }
 
-    // OS-INTEGRATION-IMPLEMENTATION-04E: optional, explicit provider selection.
-    // Omitted (the existing, default case) preserves exactly the prior behavior —
-    // every caller that doesn't ask for a specific provider still reaches Gemini,
-    // unchanged. "nvidia" reaches the adapter registered in 04D. Anything else is
-    // rejected cleanly rather than silently falling back to a default, so a typo'd
-    // provider name never silently generates against the wrong provider.
-    if (provider !== undefined && provider !== "gemini" && provider !== "nvidia") {
-      return sendError(res, 400, "VALIDATION_FAILED", requestId!, `Unknown provider "${provider}".`);
+    const validProviders: aiRouter.ServerProviderName[] = [
+      "gemini",
+      "nvidia",
+      "deepseek",
+      "qwen",
+      "glm",
+      "minimax",
+    ];
+    if (provider !== undefined && !validProviders.includes(provider)) {
+      return sendError(
+        res,
+        400,
+        "VALIDATION_FAILED",
+        requestId!,
+        `Unknown provider "${provider}". Supported: ${validProviders.join(", ")}`
+      );
     }
 
     const ctx = {
@@ -121,11 +129,22 @@ export async function createApp() {
     };
 
     try {
-      const text =
-        provider === "nvidia"
-          ? await aiRouter.generateNvidiaText(ctx, { prompt })
-          : await aiRouter.generateText(ctx, { prompt });
-      res.json({ text, requestId });
+      const result = await aiRouter.routeText(ctx, {
+        prompt,
+        preferredProvider: provider,
+        policy: policy || "balanced",
+        workflowType,
+        temperature,
+        maxTokens,
+      });
+      res.json({
+        text: result.data,
+        provider: result.provider,
+        model: result.model,
+        latencyMs: result.latencyMs,
+        tokens: result.tokens,
+        requestId,
+      });
     } catch (err: any) {
       console.error("[Runtime] S2S AI text generation error:", err.message);
       if (err?.code === "provider_credentials_unavailable") {
@@ -134,7 +153,99 @@ export async function createApp() {
       if (err?.code === "ai_budget_exceeded") {
         return sendError(res, 429, "RATE_LIMITED", requestId!, err.message);
       }
-      return sendError(res, 500, "INTERNAL_ERROR", requestId!, "AI request failed");
+      return sendError(res, 500, "INTERNAL_ERROR", requestId!, err.message || "AI request failed");
+    }
+  });
+
+  // Operator auth guard: accepts valid Supabase JWT or service token
+  const requireOperatorAuth = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const header = req.headers.authorization;
+    const serviceToken = process.env.BELL24H_VYAPARSETHU_SERVICE_TOKEN;
+    if (serviceToken && header === `Bearer ${serviceToken}`) {
+      (req as any).requestId = resolveRequestId(req, res);
+      return next();
+    }
+    // Allow in development mode if no authorization header is passed
+    if (process.env.NODE_ENV !== "production" && !header) {
+      (req as any).requestId = resolveRequestId(req, res);
+      return next();
+    }
+    return requireAuth(req, res, next);
+  };
+
+  // AI Router Operator & Diagnostic REST Endpoints
+  app.get("/api/v1/ai-router/dashboard", requireOperatorAuth, (req, res) => {
+    try {
+      const data = aiRouter.getRouterDashboardData();
+      res.json({ success: true, data });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.get("/api/v1/ai-router/circuit-breakers", requireOperatorAuth, (req, res) => {
+    try {
+      const breakers = aiRouter.getAllCircuitBreakers();
+      res.json({ success: true, breakers });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post("/api/v1/ai-router/circuit-breakers/:provider/reset", requireOperatorAuth, (req, res) => {
+    const { provider } = req.params;
+    try {
+      const updated = aiRouter.resetCircuitBreaker(provider as aiRouter.ServerProviderName);
+      res.json({ success: true, breaker: updated });
+    } catch (err: any) {
+      res.status(400).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post("/api/v1/ai-router/route", requireOperatorAuth, async (req, res) => {
+    const { policy, workflowType, preferredProvider, prompt, temperature, maxTokens } = req.body ?? {};
+    try {
+      const simulation = aiRouter.testRouteSimulation(policy, workflowType, preferredProvider);
+      let execution = null;
+      if (prompt && typeof prompt === "string" && prompt.trim().length > 0) {
+        const authedReq = req as AuthedRequest;
+        const ctx: aiRouter.RouterContext = {
+          userId: authedReq.auth?.userId || "ai-router-operator",
+          organizationId: authedReq.auth?.organizationId || "system",
+          action: "ai.route.execute",
+          requestId: authedReq.requestId || newRequestId(),
+        };
+        const execResult = await aiRouter.routeText(ctx, {
+          prompt,
+          policy: policy || "balanced",
+          preferredProvider,
+          workflowType,
+          temperature,
+          maxTokens,
+        });
+        execution = {
+          provider: execResult.provider,
+          model: execResult.model,
+          latencyMs: execResult.latencyMs,
+          tokens: execResult.tokens,
+          text: execResult.data,
+          fallbackFrom: execResult.fallbackFrom,
+        };
+      }
+      res.json({ success: true, simulation, execution });
+    } catch (err: any) {
+      res.status(400).json({ success: false, error: err.message });
+    }
+  });
+
+  app.get("/api/v1/ai-router/telemetry", requireOperatorAuth, (req, res) => {
+    const limit = Number(req.query.limit ?? 50);
+    try {
+      const telemetry = aiRouter.getRecentTelemetry(limit);
+      const summary = aiRouter.getTelemetrySummary();
+      res.json({ success: true, summary, telemetry });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
     }
   });
 

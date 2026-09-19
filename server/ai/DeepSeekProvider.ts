@@ -1,10 +1,9 @@
 /**
- * Server-side NVIDIA NIM adapter.
+ * Bell24h-OS Enterprise Intelligence Infrastructure
+ * Server-Side DeepSeek Provider Adapter
  *
- * OS-INTEGRATION-IMPLEMENTATION-04D: uses NVIDIA's OpenAI-compatible chat completions
- * endpoint (https://integrate.api.nvidia.com/v1). Credentials come from
- * ProviderManager (process environment only) — this module must never be imported from
- * `src/` (client code), matching GeminiProvider.ts's own convention.
+ * Consumes OpenAI-compatible endpoint at https://api.deepseek.com/v1.
+ * Credentials resolved strictly via ProviderManager.getCredential("deepseek").
  */
 
 import { getCredential } from "./ProviderManager.js";
@@ -14,15 +13,13 @@ import type {
   ProviderResult,
 } from "./ProviderTypes.js";
 
-const NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1";
+export const DEFAULT_MODEL = "deepseek-chat";
+export const REASONING_MODEL = "deepseek-reasoner";
+const DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1";
+const REQUEST_TIMEOUT_MS = 45000;
 
-export const DEFAULT_MODEL = "meta/llama-3.1-8b-instruct";
-
-const REQUEST_TIMEOUT_MS = 30_000;
-
-/** Plain text completion via NVIDIA's OpenAI-compatible endpoint. */
 export async function generateText(req: TextRequest): Promise<ProviderResult<string>> {
-  const { apiKey } = getCredential("nvidia");
+  const { apiKey } = getCredential("deepseek");
   const model = req.model ?? DEFAULT_MODEL;
   const startedAt = Date.now();
 
@@ -35,9 +32,8 @@ export async function generateText(req: TextRequest): Promise<ProviderResult<str
   }
   messages.push({ role: "user", content: req.prompt });
 
-  let response: Response;
   try {
-    response = await fetch(`${NVIDIA_BASE_URL}/chat/completions`, {
+    const response = await fetch(`${DEEPSEEK_BASE_URL}/chat/completions`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -51,40 +47,40 @@ export async function generateText(req: TextRequest): Promise<ProviderResult<str
       }),
       signal: controller.signal,
     });
+
+    const data: any = await response.json().catch(() => null);
+
+    if (!response.ok) {
+      const message =
+        (data && typeof data === "object" && data.error?.message) ||
+        `DeepSeek API error (${response.status}).`;
+      throw new Error(message);
+    }
+
+    const text = data?.choices?.[0]?.message?.content ?? "";
+    const usage = data?.usage;
+
+    return {
+      data: text,
+      provider: "deepseek",
+      model,
+      latencyMs: Date.now() - startedAt,
+      tokens: usage
+        ? {
+            promptTokens: usage.prompt_tokens || 0,
+            completionTokens: usage.completion_tokens || 0,
+            totalTokens: usage.total_tokens || 0,
+          }
+        : undefined,
+    };
   } catch (err: any) {
     if (err?.name === "AbortError") {
-      throw new Error("NVIDIA request timed out.");
+      throw new Error("DeepSeek request timed out.");
     }
-    throw new Error("NVIDIA request failed.");
+    throw err;
   } finally {
     clearTimeout(timeoutId);
   }
-
-  const data: any = await response.json().catch(() => null);
-
-  if (!response.ok) {
-    const message =
-      (data && typeof data === "object" && data.error?.message) ||
-      `NVIDIA API error (${response.status}).`;
-    throw new Error(message);
-  }
-
-  const text = data?.choices?.[0]?.message?.content ?? "";
-  const usage = data?.usage;
-
-  return {
-    data: text,
-    provider: "nvidia",
-    model,
-    latencyMs: Date.now() - startedAt,
-    tokens: usage
-      ? {
-          promptTokens: usage.prompt_tokens || 0,
-          completionTokens: usage.completion_tokens || 0,
-          totalTokens: usage.total_tokens || 0,
-        }
-      : undefined,
-  };
 }
 
 export async function generateJson<T>(req: JsonRequest): Promise<ProviderResult<T>> {
@@ -102,7 +98,7 @@ export async function generateJson<T>(req: JsonRequest): Promise<ProviderResult<
     const cleaned = textRes.data.trim().replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
     parsed = JSON.parse(cleaned) as T;
   } catch {
-    throw new Error("NVIDIA provider returned unparseable JSON.");
+    throw new Error("DeepSeek provider returned unparseable JSON.");
   }
 
   return {
