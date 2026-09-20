@@ -32,55 +32,52 @@ export class PublishingJobHandler {
     const { payload, organization_id, id: jobId } = job;
     const requestId = newRequestId();
 
-    // Simulate channel dispatch
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    // Stage A (honest failure): no real channel-dispatch integration (LinkedIn,
+    // Twitter/X, Facebook, Instagram, YouTube) is wired yet. This previously
+    // simulated a dispatch delay and fabricated a "published" result with a
+    // synthetic post ID that no channel ever issued. Stage B (real channel
+    // adapters) is tracked separately — see
+    // docs/project/BELL24H_OS_P0_REMEDIATION_IMPLEMENTATION_PLAN.md Phase 2.
+    //
+    // Note: PublishingCenterService.enqueuePublishingTask() has zero call sites
+    // in the repository today, so this handler is also unreachable from the
+    // enqueue side — recorded, not fixed, as out of scope for this change.
+    const errorMessage =
+      "PROVIDER_NOT_CONFIGURED: no publishing channel integration is wired yet.";
 
-    const externalPostId = `post_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-
-    // 1. Update publishing_queue record if linked
     if (payload.queue_id) {
       await this.pool.query(
         `
         UPDATE public.publishing_queue
-        SET status = 'published'
+        SET status = 'failed'
         WHERE id = $1 AND organization_id = $2;
         `,
         [payload.queue_id, organization_id]
       );
 
-      // 2. Insert into publishing_history
       await this.pool.query(
         `
-        INSERT INTO public.publishing_history (
+        INSERT INTO public.publishing_logs (
+          organization_id,
           queue_id,
-          organization_id,
-          published_at,
-          result
-        ) VALUES ($1, $2, NOW(), $3);
+          log
+        ) VALUES ($1, $2, $3);
         `,
-        [
-          payload.queue_id,
-          organization_id,
-          JSON.stringify({ externalPostId, channel: payload.channel_type || "web", status: "published" }),
-        ]
+        [organization_id, payload.queue_id, errorMessage]
       );
     }
 
     emitAuditEvent({
       actor: "service:worker",
       organizationId: organization_id,
-      action: "job.publishing.completed",
+      action: "job.publishing.failed",
       targetType: "job_queue",
       targetId: jobId,
-      outcome: "success",
+      outcome: "failure",
       requestId,
-      metadata: { externalPostId, channel: payload.channel_type },
+      metadata: { channel: payload.channel_type, reason: "PROVIDER_NOT_CONFIGURED" },
     });
 
-    return {
-      externalPostId,
-      status: "published",
-      publishedAt: new Date().toISOString(),
-    };
+    throw new Error(errorMessage);
   }
 }
