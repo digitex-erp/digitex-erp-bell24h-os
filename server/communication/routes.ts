@@ -26,7 +26,12 @@ import {
   MessageNotFoundError,
   QuotaExceededError,
 } from "./CommunicationService.js";
+import { AnalyticsService } from "./AnalyticsService.js";
+import { AudienceNotFoundError, AudienceService } from "./AudienceService.js";
 import { CampaignNotFoundError, CampaignService, CampaignStateError } from "./CampaignService.js";
+import { SuppressedRecipientError, SuppressionNotFoundError, SuppressionService } from "./SuppressionService.js";
+import { TemplateInUseError, TemplateNotFoundError, TemplateService } from "./TemplateService.js";
+import { getUnsubscribeConfig, verifyUnsubscribeToken } from "./unsubscribe.js";
 import { DashboardService } from "./DashboardService.js";
 import { ProviderAdminService, ProviderNotFoundError } from "./ProviderAdminService.js";
 import { requirePermission } from "./rbac.js";
@@ -80,7 +85,15 @@ function sendError(res: Response, err: unknown, requestId: string | undefined, l
     res.status(404).json({ error: "not_found", requestId });
     return;
   }
-  if (err instanceof CampaignNotFoundError || err instanceof ProviderNotFoundError) {
+  if (err instanceof SuppressedRecipientError) {
+    res.status(422).json({ error: "recipient_suppressed", detail: err.message, requestId });
+    return;
+  }
+  if (err instanceof TemplateInUseError) {
+    res.status(409).json({ error: "template_in_use", detail: err.message, requestId });
+    return;
+  }
+  if (err instanceof CampaignNotFoundError || err instanceof ProviderNotFoundError || err instanceof AudienceNotFoundError || err instanceof SuppressionNotFoundError || err instanceof TemplateNotFoundError) {
     res.status(404).json({ error: "not_found", requestId });
     return;
   }
@@ -107,7 +120,9 @@ function auditRejectedSend(actor: string, organizationId: string, requestId: str
       ? "validation_failed"
       : err instanceof QuotaExceededError
         ? "quota_exceeded"
-        : err instanceof IdempotencyKeyReuseError
+        : err instanceof SuppressedRecipientError
+          ? "recipient_suppressed"
+          : err instanceof IdempotencyKeyReuseError
           ? "idempotency_key_reuse"
           : err instanceof CampaignStateError
             ? err.code
@@ -353,6 +368,8 @@ export function registerCommunicationRoutes(app: Express, deps: CommunicationRou
         channelType: b.channelType,
         templateId: b.templateId,
         contactIds: b.contactIds,
+        listId: b.listId,
+        segmentId: b.segmentId,
         variables: b.variables,
         consentConfirmed: b.consentConfirmed,
       });
@@ -557,6 +574,218 @@ export function registerCommunicationRoutes(app: Express, deps: CommunicationRou
       // 5xx so Meta retries; details stay in the server log.
       console.error("[Runtime] WhatsApp webhook ingest error:", (err as Error)?.message);
       res.status(500).json({ error: "internal_error" });
+    }
+  });
+
+  // =============================================================================================
+  // CH-02 audience management: templates (edit), suppressions, unsubscribe, lists, segments, analytics
+  // Permissions: read = view; write = create/edit lists, segments, templates and ADD suppressions (all can
+  // only reduce or prepare sends); manage (ADMIN) = REMOVE a suppression (re-enables contacting someone).
+  // =============================================================================================
+  const audience = () => new AudienceService(getPool());
+  const suppressions = () => new SuppressionService(getPool());
+
+  // ---- templates: edit / deactivate ------------------------------------------------------------
+  app.patch("/api/communications/templates/:id", authenticate, canWrite, writeLimiter, async (req: Request, res: Response) => {
+    const { auth, requestId } = req as AuthedRequest;
+    try {
+      if (!UUID_RE.test(req.params.id)) throw new TemplateNotFoundError();
+      if (!isPlainObject(req.body)) throw new CommunicationValidationError("body", "must be a JSON object");
+      res.json({ success: true, template: await new TemplateService(getPool()).update(auth!.organizationId, auth!.userId, req.params.id, req.body) });
+    } catch (err) {
+      sendError(res, err, requestId, "template update");
+    }
+  });
+
+  // ---- suppression list -------------------------------------------------------------------------
+  app.get("/api/communications/suppressions", authenticate, canRead, async (req: Request, res: Response) => {
+    const { auth, requestId } = req as AuthedRequest;
+    try {
+      res.json(await suppressions().list(auth!.organizationId, { channelType: req.query.channelType, q: req.query.q, reason: req.query.reason, ...pageParams(req) }));
+    } catch (err) {
+      sendError(res, err, requestId, "suppression list");
+    }
+  });
+
+  app.post("/api/communications/suppressions", authenticate, canWrite, writeLimiter, async (req: Request, res: Response) => {
+    const { auth, requestId } = req as AuthedRequest;
+    const b = req.body ?? {};
+    try {
+      const addresses = b.addresses !== undefined ? b.addresses : b.address !== undefined ? [b.address] : undefined;
+      res.status(201).json({ success: true, ...(await suppressions().add(auth!.organizationId, auth!.userId, { channelType: b.channelType, addresses, reason: b.reason, note: b.note })) });
+    } catch (err) {
+      sendError(res, err, requestId, "suppression add");
+    }
+  });
+
+  app.delete("/api/communications/suppressions/:id", authenticate, canManage, writeLimiter, async (req: Request, res: Response) => {
+    const { auth, requestId } = req as AuthedRequest;
+    try {
+      if (!UUID_RE.test(req.params.id)) throw new SuppressionNotFoundError();
+      await suppressions().remove(auth!.organizationId, auth!.userId, req.params.id);
+      res.json({ success: true });
+    } catch (err) {
+      sendError(res, err, requestId, "suppression remove");
+    }
+  });
+
+  // ---- public one-click unsubscribe (NOT user-authenticated: authorized by a signed token) ----------------
+  // GET only renders a confirmation page (mail scanners prefetch links; a GET must never unsubscribe).
+  // POST performs it (form button, or RFC 8058 one-click from the mail client).
+  const unsubscribePage = (res: Response, status: number, title: string, message: string, form?: { action: string }) => {
+    res.status(status);
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("X-Robots-Tag", "noindex");
+    res.setHeader("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'");
+    const esc = (t: string) => t.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] as string);
+    res.send(
+      "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><meta name=\"robots\" content=\"noindex\"><title>" +
+        esc(title) +
+        "</title><style>body{font-family:system-ui,sans-serif;max-width:32rem;margin:4rem auto;padding:0 1rem;line-height:1.5}button{font-size:1rem;padding:.6rem 1.2rem}</style></head><body><h1>" +
+        esc(title) +
+        "</h1><p>" +
+        esc(message) +
+        "</p>" +
+        (form ? `<form method="post" action="${esc(form.action)}"><button type="submit">Unsubscribe</button></form>` : "") +
+        "</body></html>",
+    );
+  };
+  const maskAddress = (a: string) => (a.includes("@") ? `${a.split("@")[0].slice(0, 1)}***@${a.split("@")[1]}` : `${a.slice(0, 3)}***${a.slice(-2)}`);
+
+  app.get("/api/communications/unsubscribe", (req: Request, res: Response) => {
+    const cfg = getUnsubscribeConfig();
+    if (!cfg) return unsubscribePage(res, 503, "Unavailable", "Unsubscribe is not configured on this server. Please reply to the email instead.");
+    const claims = verifyUnsubscribeToken(req.query.t, cfg.secret);
+    if (!claims) return unsubscribePage(res, 400, "Invalid link", "This unsubscribe link is not valid.");
+    unsubscribePage(res, 200, "Unsubscribe", `Stop receiving ${claims.channel} messages at ${maskAddress(claims.address)}?`, {
+      action: `/api/communications/unsubscribe?t=${encodeURIComponent(String(req.query.t))}`,
+    });
+  });
+
+  app.post("/api/communications/unsubscribe", async (req: Request, res: Response) => {
+    const cfg = getUnsubscribeConfig();
+    if (!cfg) return unsubscribePage(res, 503, "Unavailable", "Unsubscribe is not configured on this server. Please reply to the email instead.");
+    const claims = verifyUnsubscribeToken(req.query.t, cfg.secret);
+    if (!claims) return unsubscribePage(res, 400, "Invalid link", "This unsubscribe link is not valid.");
+    try {
+      await suppressions().addFromUnsubscribe(claims.organizationId, claims.channel, claims.address);
+      unsubscribePage(res, 200, "You are unsubscribed", `${maskAddress(claims.address)} will no longer receive these messages.`);
+    } catch (err) {
+      console.error("[Runtime] Unsubscribe error:", (err as Error)?.message);
+      unsubscribePage(res, 500, "Something went wrong", "We could not process your request. Please try again later.");
+    }
+  });
+
+  // ---- contact lists -----------------------------------------------------------------------------
+  app.get("/api/communications/lists", authenticate, canRead, async (req: Request, res: Response) => {
+    const { auth, requestId } = req as AuthedRequest;
+    try {
+      res.json(await audience().listLists(auth!.organizationId));
+    } catch (err) {
+      sendError(res, err, requestId, "lists");
+    }
+  });
+  app.post("/api/communications/lists", authenticate, canWrite, writeLimiter, async (req: Request, res: Response) => {
+    const { auth, requestId } = req as AuthedRequest;
+    try {
+      res.status(201).json({ success: true, list: await audience().createList(auth!.organizationId, auth!.userId, { name: req.body?.name, description: req.body?.description }) });
+    } catch (err) {
+      sendError(res, err, requestId, "list create");
+    }
+  });
+  app.delete("/api/communications/lists/:id", authenticate, canWrite, writeLimiter, async (req: Request, res: Response) => {
+    const { auth, requestId } = req as AuthedRequest;
+    try {
+      if (!UUID_RE.test(req.params.id)) throw new AudienceNotFoundError("list");
+      await audience().deleteList(auth!.organizationId, req.params.id);
+      res.json({ success: true });
+    } catch (err) {
+      sendError(res, err, requestId, "list delete");
+    }
+  });
+  app.get("/api/communications/lists/:id/members", authenticate, canRead, async (req: Request, res: Response) => {
+    const { auth, requestId } = req as AuthedRequest;
+    try {
+      if (!UUID_RE.test(req.params.id)) throw new AudienceNotFoundError("list");
+      res.json(await audience().listMembers(auth!.organizationId, req.params.id, pageParams(req)));
+    } catch (err) {
+      sendError(res, err, requestId, "list members");
+    }
+  });
+  app.post("/api/communications/lists/:id/members", authenticate, canWrite, writeLimiter, async (req: Request, res: Response) => {
+    const { auth, requestId } = req as AuthedRequest;
+    try {
+      if (!UUID_RE.test(req.params.id)) throw new AudienceNotFoundError("list");
+      res.status(201).json({ success: true, ...(await audience().addMembers(auth!.organizationId, req.params.id, req.body?.contactIds)) });
+    } catch (err) {
+      sendError(res, err, requestId, "list add members");
+    }
+  });
+  app.delete("/api/communications/lists/:id/members", authenticate, canWrite, writeLimiter, async (req: Request, res: Response) => {
+    const { auth, requestId } = req as AuthedRequest;
+    try {
+      if (!UUID_RE.test(req.params.id)) throw new AudienceNotFoundError("list");
+      res.json({ success: true, ...(await audience().removeMembers(auth!.organizationId, req.params.id, req.body?.contactIds)) });
+    } catch (err) {
+      sendError(res, err, requestId, "list remove members");
+    }
+  });
+
+  // ---- segments ------------------------------------------------------------------------------------
+  app.get("/api/communications/segments", authenticate, canRead, async (req: Request, res: Response) => {
+    const { auth, requestId } = req as AuthedRequest;
+    try {
+      res.json(await audience().listSegments(auth!.organizationId));
+    } catch (err) {
+      sendError(res, err, requestId, "segments");
+    }
+  });
+  app.post("/api/communications/segments", authenticate, canWrite, writeLimiter, async (req: Request, res: Response) => {
+    const { auth, requestId } = req as AuthedRequest;
+    try {
+      res.status(201).json({ success: true, segment: await audience().createSegment(auth!.organizationId, auth!.userId, { name: req.body?.name, criteria: req.body?.criteria }) });
+    } catch (err) {
+      sendError(res, err, requestId, "segment create");
+    }
+  });
+  app.post("/api/communications/segments/preview", authenticate, canRead, writeLimiter, async (req: Request, res: Response) => {
+    const { auth, requestId } = req as AuthedRequest;
+    try {
+      res.json(await audience().previewSegment(auth!.organizationId, req.body?.channelType, req.body?.criteria));
+    } catch (err) {
+      sendError(res, err, requestId, "segment preview");
+    }
+  });
+  app.delete("/api/communications/segments/:id", authenticate, canWrite, writeLimiter, async (req: Request, res: Response) => {
+    const { auth, requestId } = req as AuthedRequest;
+    try {
+      if (!UUID_RE.test(req.params.id)) throw new AudienceNotFoundError("segment");
+      await audience().deleteSegment(auth!.organizationId, req.params.id);
+      res.json({ success: true });
+    } catch (err) {
+      sendError(res, err, requestId, "segment delete");
+    }
+  });
+
+  // ---- analytics (real rows only) ---------------------------------------------------------------------
+  app.get("/api/communications/analytics", authenticate, canRead, async (req: Request, res: Response) => {
+    const { auth, requestId } = req as AuthedRequest;
+    try {
+      const days = req.query.days === undefined ? undefined : Number(req.query.days);
+      if (days !== undefined && (!Number.isInteger(days) || days < 1 || days > 90)) throw new CommunicationValidationError("days", "must be an integer between 1 and 90");
+      res.json(await new AnalyticsService(getPool()).getOrganizationAnalytics(auth!.organizationId, days));
+    } catch (err) {
+      sendError(res, err, requestId, "analytics");
+    }
+  });
+  app.get("/api/communications/campaigns/:id/analytics", authenticate, canRead, async (req: Request, res: Response) => {
+    const { auth, requestId } = req as AuthedRequest;
+    try {
+      if (!UUID_RE.test(req.params.id)) throw new CampaignNotFoundError();
+      res.json(await new AnalyticsService(getPool()).getCampaignAnalytics(auth!.organizationId, req.params.id));
+    } catch (err) {
+      sendError(res, err, requestId, "campaign analytics");
     }
   });
 }

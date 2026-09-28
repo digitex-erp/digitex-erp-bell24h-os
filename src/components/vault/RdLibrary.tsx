@@ -16,7 +16,8 @@ import {
   Loader2
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
-import { authedFetchJson, AuthedFetchError } from "@/lib/authedFetch";
+import { authedFetchJson } from "@/lib/authedFetch";
+import { vaultLoadError } from "@/lib/diagnosticsErrors";
 
 interface RdItem {
   id: string;
@@ -50,11 +51,7 @@ export function RdLibrary() {
       })
       .catch(err => {
         console.error("Failed to fetch RD items:", err);
-        setError(
-          err instanceof AuthedFetchError && err.status === 401
-            ? "Your session could not be verified — try signing in again."
-            : "Could not load the research library.",
-        );
+        setError(vaultLoadError(err, "the research library"));
         setItems([]);
         setLoading(false);
       });

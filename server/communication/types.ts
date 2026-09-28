@@ -157,6 +157,8 @@ export interface OutboundMessage {
   /** Stable per-message key. Passed to providers that support idempotent sends so a worker
    *  re-run after a crash cannot deliver a second copy (Resend: Idempotency-Key header). */
   idempotencyKey?: string;
+  /** Campaign email only: the signed one-click unsubscribe link, sent as List-Unsubscribe headers (RFC 8058). */
+  unsubscribeUrl?: string;
 }
 
 /** Non-secret settings resolved from communication_providers.settings, plus

@@ -1,115 +1,124 @@
-# CH-02 — Admin Communications Center: Implementation Report
+# CH-02 — Implementation Audit and Build Report
 
 **Date:** 2026-09-28 · **Branch:** `sprint/ch-02-campaigns` (cut from `feature/communication-hub` @ `bd3b8af`; **local only — not pushed, no PR**)
-**Scope:** build `/admin/communications` on top of the existing Communication Hub, with the Template → Test → Schedule → Execute → Log workflow. This report supersedes the earlier-named `COMMUNICATION_HUB_PRODUCTION_READINESS_REPORT.md` request (same sprint, revised brief).
+**Frozen decisions honoured:** no Twilio · no MSG91 WhatsApp · WhatsApp = Meta WhatsApp Cloud API only · Email = Resend + SMTP · Bell24h-OS is the Communication Hub, VyaparSethu consumes it through the API · SHAP/LIME, RFQ Matching, Trust and MiroFish were **not** touched.
 
 ## 1. Verdict
 
-**Built and verified against a real Postgres engine and a real browser — with no real provider and no real scheduler in the loop.** Every send path fails closed when no provider is configured. **Nothing in this sprint has sent a real email, WhatsApp message or SMS**, and no provider has been verified. Do not describe the Communication Hub as "working" until the acceptance steps in §8 have been observed.
+**Code-complete for the CH-02 scope and verified against a real Postgres engine and a real browser — with no real provider, no real scheduler and no migration applied to any database.** Nothing in this sprint has sent a real email, WhatsApp message or SMS, and no provider has been verified.
+
+| Certification asked for | Verdict | Why |
+|---|---|---|
+| **Campaign Engine** | **Logic verified with test doubles only — NOT production-certified** | Orchestration, gates, batching, suppression, unsubscribe, analytics and fail-closed behaviour are covered by 315 automated tests and a 63-check browser run. The provider in those runs is a labelled test double. |
+| **Communications Hub** | **NOT certified** | No real provider has ever completed a send; the schema is not applied anywhere; unsubscribe env is unset; no durable audit table exists (§6). |
+| **Scheduler (InsForge → worker tick)** | **NOT certified** | `npx tsx scripts/certify-scheduler.ts` run against the linked InsForge project today: **0 schedules exist → NOT CERTIFIED** (exit 1). The checker only says CERTIFIED with evidence (§4). |
 
 | Gate | Result |
 |---|---|
 | `npx tsc --noEmit` | **PASS** (exit 0) |
-| `npm run build` | **PASS** (exit 0) |
-| `npm test` | **209 / 209 pass**, 59 suites, 0 skipped |
-| Browser end-to-end (real Chrome, real UI, real routes, real SQL) | **37 / 37 checks pass** — with a *test-double* provider and a stand-in scheduler (§4) |
-| Real provider send / real scheduler / production deploy / migration applied to any DB | **NOT DONE — not verified** |
+| `npm run build` | **PASS** |
+| `npm test` | **315 / 315 pass**, 86 suites, 0 skipped |
+| Browser E2E (`scripts/ch02-ui-harness`, real Chrome + real UI + real routes + real SQL) | **63 / 63 checks pass** — test-double provider, stand-in scheduler, stubbed login (§7) |
+| Real provider send · real scheduler run · production deploy · migration applied to a live DB | **NOT DONE** |
 
-## 2. Requirement-by-requirement
+## 2. Corrections to the premises of the brief (verified, not assumed)
 
-| # | Requirement | Status | Evidence / note |
-|---|---|---|---|
-| 1 | `/admin/communications` with tabs Dashboard, Templates, Campaigns, Schedules, Logs, Providers | **Done, browser-verified** | Tab order asserted in the E2E. `/communications` now redirects to it; nav updated; the old placeholder page (which still said "WhatsApp (Meta/MSG91)") is deleted. |
-| 2 | Integrate the existing Communication Hub service | **Done** | Campaign messages go through `CommunicationService.sendMessage()` — same validation, quota, idempotency, queue, worker, provider path as a single send. A campaign is not a second sending path. |
-| 3 | Integrate InsForge scheduling | **Prepared, NOT executed** | InsForge CLI verified reachable (project linked, authenticated, `schedules list` = `[]`). No schedule created: that needs the deployed URL and the value of `CRON_SECRET`, which I do not have and must not invent. Exact commands, acceptance criteria and rollback: `docs/project/CH02_INSFORGE_WORKER_SCHEDULE_RUNBOOK.md`. The InsForge **MCP** server timed out at session start; the CLI works. |
-| 4 | Template → Test → Schedule → Execute → Log | **Done, browser-verified** | Plus "select leads" and "create" ahead of it. Schedule and Execute are locked until a real test message has reached `sent` (server-enforced, mirrored in the UI). |
-| 5 | No Twilio | **Done in code; docs cleaned** | No Twilio class, registry key, import, env var or SQL (`getAdapter("twilio")` throws — tested). Forward-looking planning docs edited (§6). |
-| 6 | No MSG91 WhatsApp | **Done** | No code path exists; UI text corrected; docs edited. MSG91 remains an SMS/OTP **stub** in the registry (owner decision — see §7). |
-| 7 | Providers: Resend, SMTP, Meta WhatsApp Cloud API (future-ready only) | **Done — Meta is more than "future-ready"** | Resend + SMTP: real adapters, never run live. Meta: a real adapter + signature-verified webhook **ported from the site repo's pattern**, shipped **disabled and labelled UNVERIFIED** (see §7 deviation 2). |
-| 8 | Every send creates audit logs | **Done for what the repo supports** | Accepted, refused, worker-sent, failed, dead-lettered, campaign lifecycle: all emit audit events (tested by capturing real events). **Limit:** `server/audit.ts` writes structured JSON to stdout only — the repo has no durable audit table. The durable per-send record is `communication_messages` + `communication_deliveries`; tests assert both exist for every send that reached a provider. |
-| 9 | No mock success responses | **Done** | No sample data anywhere in the UI or API. Every count is a `COUNT` of real rows. "Verified" appears only after a real successful delivery attempt. The Dashboard can only *warn*; it never reports "healthy". |
-| 10 | Fail closed if provider not configured | **Done, tested at three layers** | Worker → `PROVIDER_NOT_CONFIGURED`, message failed, audited; test-send fails → campaign gate stays shut; UI shows the real error. Also: un-allow-listed secret names are refused; missing credential → `not_configured`, no adapter call. |
-| 11 | Produce `CH02_IMPLEMENTATION_REPORT.md` | **This file** | |
+1. **"Direct DB Connection (Admin) — Error: unauthenticated" is not a missing `SUPABASE_SERVICE_ROLE_KEY`.** The repo contains **no service-role client at all** (grep: no `SUPABASE_SERVICE_ROLE_KEY` use). Data access is (a) PostgREST *as the caller* with the caller's own token (`postgrestFetch`) and (b) a pooled `DATABASE_URL` pg connection. The 401 came from the diagnostics page calling `/api/check-table` and `/api/check-users-count` with a **plain `fetch` — no `Authorization` header** — so `requireAuth` correctly said "unauthenticated". Fixed in the client (§3 #2). Adding a service-role key would have been the wrong fix (and would bypass RLS).
+2. **"Knowledge Vault: Could not load documents" cannot be diagnosed from this repo.** The code collapsed every non-401 failure into that one line. I made the real reason visible and added a health endpoint; the underlying cause (table missing? RLS? no policy?) needs one read-only query against the live database — see §3 #1. I did not guess.
+3. **"Industry Intelligence blank page"** — the page and route exist (`/industry-dashboard`); the cause was **not investigated** (needs an authenticated browser session against the live backend; not in the CH-02 task list). Reported under Pending.
+4. **"AI Providers 0/6"** is a credentials matter, not a code defect (Blocked / Requires Credentials).
 
-## 3. What was built
+## 3. Completed
 
-**Database — `add_communication_campaigns.sql`** (new file; requires `add_communication_hub.sql`; re-runnable; **not applied anywhere**)
-- `communication_campaign_recipients` — audience snapshot (validated address, per-recipient variables, status, message link), `UNIQUE(campaign_id, recipient)`.
-- Campaign columns: consent attestation, last test message, run counter, started/completed, paused reason; status now includes `paused`.
-- `communication_messages.is_test` — test sends never count toward campaign totals.
-- `communication_logs` — a **read-only view** (`security_invoker`) joining messages to their delivery attempts. See §7 deviation 1.
-- Same write model as C0: tenants read their own org's rows; only the server writes.
+### #1 Knowledge Vault document loading — diagnosability fixed; root cause needs one query
+- `server/lib/vaultHealth.ts` + `GET /api/vault/health` (auth required): asks PostgREST *as the caller* for one row of each of `vault_documents, rd_library, timeline_milestones, phases, decision_records` and classifies each failure `table_missing | permission_denied | server_unconfigured | upstream_error` with the upstream detail (capped) and a remedy.
+- The five vault components now show the real reason (`vaultLoadError`) instead of "Could not load documents"; `authedFetch` errors now include the server's `detail`. Diagnostics page has a new **Knowledge Vault tables** row.
+- **To find the actual cause, run this read-only query in the Supabase SQL editor and paste the result:**
+```sql
+SELECT v.t AS table_name,
+       to_regclass('public.' || v.t) IS NOT NULL AS table_exists,
+       c.relrowsecurity AS rls_enabled,
+       CASE WHEN c.oid IS NULL THEN NULL ELSE has_table_privilege('authenticated', c.oid, 'SELECT') END AS authenticated_can_select,
+       CASE WHEN c.oid IS NULL THEN NULL ELSE has_table_privilege('anon', c.oid, 'SELECT') END AS anon_can_select,
+       (SELECT string_agg(p.polname || ' (' || p.polcmd || ')', ', ') FROM pg_policy p WHERE p.polrelid = c.oid) AS policies
+FROM (VALUES ('vault_documents'), ('rd_library'), ('timeline_milestones'), ('phases'), ('decision_records')) AS v(t)
+LEFT JOIN pg_class c ON c.oid = to_regclass('public.' || v.t)
+ORDER BY 1;
+```
+  If `table_exists = false`, the fix is applying `add_knowledge_vault.sql` (manual SQL workflow: I will give you one statement at a time). Note that file's `CREATE POLICY "Public Read Access"` lines are not idempotent — re-running it on a database that already has the policies errors.
 
-**Server — `server/communication/`**
-- `CampaignService` (leads, create, test, schedule, execute, cancel, worker batch expansion, reconcile), `DashboardService`, `ProviderAdminService`.
-- `MetaWhatsAppCloudProvider`, `whatsappWebhook` (handshake + HMAC-SHA256 on the **raw** body, fail-closed when unconfigured, monotonic status ingestion, phone numbers not stored).
-- 17 new routes under `/api/communications/*` (leads, campaigns ×8, logs ×2, providers ×2, dashboard, schedules, webhook ×2), all behind the C0 RBAC → rate-limit chain. New `manage` permission (ADMIN) for provider health checks; campaign test/schedule/execute/cancel need `send`; creating a draft needs `write`.
-- `CommunicationJobHandler` handles `{campaignId, run}` jobs and reconciles the campaign after each message.
+### #2 Admin Diagnostics "unauthenticated" — fixed and hardened
+- `fetchTableCheck / fetchUserCount / fetchVaultHealth` now use `authedFetchJson`; the Direct DB row shows a **warning ("not signed in")** rather than an error when there is no session; every diagnostics failure shows status + reason (`diagnosticError`).
+- **Security tightening found on the way:** `/api/check-table` and `/api/check-users-count` were reachable by any signed-in user; both now require the **ADMIN** role (`requireAnyRole`, denial audited). Tests include source-level regression guards.
 
-**UI — `src/`** (`AdminCommunicationsPage` + 9 component files, typed API client, pure flow helpers with unit tests). Disabled buttons state their reason; execute/cancel need confirmation; polling only while something is in flight.
+### #3 Supabase service-role architecture — verified (read-only)
+See §2 #1. No service-role client exists; the model is "tenants read, server writes" with RLS + `REVOKE`, the server writing through the pooled `DATABASE_URL` connection. **Unverified:** which DB role `DATABASE_URL` connects as — run `SELECT current_user, rolbypassrls, rolsuper FROM pg_roles WHERE rolname = current_user;` before applying the migrations.
 
-## 4. How it was verified — and what that does not prove
+### #4 CH-02 features (all server-side tested; UI browser-tested)
+| Feature | What exists |
+|---|---|
+| **Campaign Management** | Draft → test → schedule/execute → cancel/resume; bounded worker batches; quota pause; consent attestation; audience from **exactly one** of picked contacts / a saved list / a saved segment. |
+| **Campaign Templates** | Create **and edit** (PATCH: name/subject/body/active; same validation as create; audited by field *names* only). Content and deactivation are **locked (409 `template_in_use`) while a draft/scheduled/running/paused campaign uses the template**; renaming is always allowed. Email templates used in campaigns must contain `{{unsubscribe_url}}`. |
+| **Campaign Scheduling** | `schedule` records *when* (job with `scheduled_at`); gated on a **verified real test send**. Starts only when a tick runs (§4). |
+| **Campaign Execution Logs** | `communication_logs` view (one row per message + attempts), Logs tab, per-attempt drill-down; durable rows in `communication_messages` / `communication_deliveries`. |
+| **Campaign Analytics** | Org analytics (7/30/90 days: per-day accepted/failed, by channel, failure reasons, suppression breakdown, audience sizes) and per-campaign analytics. **Only real counts.** Email/SMS report *provider acceptance only* — delivered/open/click rates are **not shown because they do not exist** (`null` → "n/a", tested). WhatsApp shows a delivered rate only from webhook-reported statuses. |
+| **Contact Lists** | Create/delete, member add/remove (only this org's live contacts; foreign/deleted/unknown ids reported, never inserted; idempotent). |
+| **Segmentation** | Saved criteria (`listIds, companyContains, nameContains, createdAfter/Before`), **strictly validated (unknown keys rejected so a typo cannot widen an audience), parameterised SQL, LIKE wildcards escaped, org-isolated, capped**; preview shows matches, suppressed count and a sample. Tested against SQL-injection strings. |
+| **Suppression Lists** | Per-org, per-channel; reasons `unsubscribed/bounced/complained/manual/invalid`; enforced **three times**: at audience creation (counted, not silent), at the send API (422 `recipient_suppressed`) and again by the worker just before the provider call (message cancelled `suppressed: <reason>`, audited). Removal is ADMIN-only. |
+| **Unsubscribe** | HMAC-signed one-click link (no secret/id in it); public page: **GET only asks for confirmation, POST unsubscribes** (defeats mail-scanner prefetch); CSP/no-store/noindex; `List-Unsubscribe` + `List-Unsubscribe-Post` on Resend and SMTP (header-injection-safe, tested on the wire). **Fails closed:** without `COMM_UNSUBSCRIBE_SECRET` + `COMM_PUBLIC_BASE_URL` an email campaign cannot be scheduled/executed and a running one pauses (`unsubscribe_not_configured`). |
+| **UI** | New tabs **Audience** (lists + segments), **Analytics**, **Suppressions**; wizard audience source; template edit dialog; per-campaign analytics panel; every disabled control states why. |
 
-1. **209 automated tests** (node:test via tsx; PGlite runs the **real** migrations, real `job_queue` DDL, real `QueueManager`, real handler): campaign flow 26 · dashboard/schedules/audit 14 · WhatsApp adapter + webhook 25 · provider admin 11 · routes 41 · validation 21 · providers 19 · handler 11 · migration 10 · SMTP wire 7 · UI flow helpers 22 · idempotency race 2.
-2. **Mutation checks** (a break is introduced, the tests must fail, then it is restored): webhook signature always-true → 4 tests fail; "test must be verified" gate removed → 3 tests fail. (C0's earlier checks on SMTP/migration/allowlist also still hold.)
-3. **Browser E2E** — `scripts/ch02-ui-harness/` (documented, repeatable): real Chrome drives the real page against the real routes/SQL/handler.
-   - *Scenario A, no provider:* template created via UI → wizard selects 5 leads (invalid address flagged, phone-only contact excluded) → consent required → test send → **fails with `PROVIDER_NOT_CONFIGURED`, gate stays closed**, Logs show "no provider was ever called".
-   - *Scenario B, test-double provider:* health check → test send → **verified only after the worker actually ran** → schedule → Schedules tab (queued, not overdue) → execute with confirmation → **5 sent, 0 failed, completed** → Logs 5 rows → provider becomes "verified" → Dashboard counts.
-   - **Stubbed in the harness:** login (always a seeded ADMIN), the provider (a double called "Resend (TEST DOUBLE)" — no network), the scheduler (`/__tick` runs queued jobs through the real handler).
-   - **Therefore:** a pass proves the UI and orchestration are correct and fail closed. It does **not** prove that Resend, SMTP or Meta deliver, that real Supabase login/roles work in the UI, or that a scheduler triggers the worker.
+### #5 InsForge Scheduler — prepared and certifiable, not created
+See §4.
 
-## 4b. A defect found and fixed during verification
-An early test run showed the UI consent checkbox had a 0×0 box. Root cause: **my harness had no CSS** (Tailwind v4 scans from Vite's root; the harness root was a temp folder). Not a product bug; fixed in the harness and re-run. Recorded so nobody wonders why the E2E has a `root` override.
+### #6 Meta WhatsApp Cloud API adapter framework — present, UNVERIFIED
+`MetaWhatsAppCloudProvider` + HMAC-SHA256 webhook on the raw body (fail-closed when unconfigured, monotonic status ingestion, phone numbers not stored). Needs no credentials to exist; makes **no request to Meta** until an operator creates a provider row and sets an allow-listed token. **Open decision (yours):** the brief said "future-ready only"; if that meant *interface only*, revert `MetaWhatsAppCloudProvider.ts`, `whatsappWebhook.ts` and the two webhook routes to a stub. Not resolved without your yes/no.
 
-## 5. Fail-closed behaviour (all tested)
-- No provider row / no allow-listed credential on the server → send fails `PROVIDER_NOT_CONFIGURED` (audited); nothing is marked sent.
-- Test message not `sent`/`delivered` → schedule and execute refused (409), in API **and** UI.
-- No consent attestation → campaign not created; consent record missing → run refused.
-- Quota reached mid-campaign → campaign **pauses** (nothing dropped, resumable), audited.
-- Webhook with no app secret / bad signature / no raw body → 401, nothing changed.
-- Health check with a stub, unknown provider, or missing credential → reported, adapter not called, nothing written.
+## 4. Scheduler certification (repeatable)
+`npx tsx scripts/certify-scheduler.ts [--app-url https://<host>]` reads `insforge schedules list/logs` through the CLI and prints **CERTIFIED** only when *all* hold: an **active GET https** schedule targets `/api/v1/workers/tick` with an Authorization header; **≥ 3 of the last 10 runs are HTTP 2xx and none failed** (a log row with no readable status is *never* counted as success); the newest run is < 24 h old; and (with `--app-url`) an **unauthenticated** GET of the tick route is refused (401/403). It never creates a schedule, never sends a credential, never prints a header value. 13 unit tests cover the decision logic. **Today: NOT CERTIFIED (0 schedules).** Creating the schedule needs the deployed URL and `CRON_SECRET` — see `docs/project/CH02_INSFORGE_WORKER_SCHEDULE_RUNBOOK.md`. Throughput reminder: 5 jobs per tick ≈ 5 messages/minute at a 1-minute cadence.
 
-## 6. Documentation cleanup
-Edited (forward-looking): `BELL24H_COMMUNICATION_HUB_IMPLEMENTATION_PLAN.md`, `BELL24H_OS_COMMUNICATION_HUB_SPRINT_B_PLAN.md`, `GATE_D1_…_PROVIDER_GATE.md`, `COMMUNICATION_HUB_IMPLEMENTATION_REPORT.md`, `ARCHITECTURE_DECISIONS.md` — Twilio rows/adapters/routes removed, MSG91 narrowed to SMS/OTP, a dated "provider scope update" banner added. The banners themselves (and a historical "terms searched" list) still contain the word "Twilio" as a statement of removal.
-**Deliberately not edited** (dated historical records — rewriting them would falsify history): `BELL24H_OS_PRODUCTION_VERIFICATION_REPORT.md`, `BELL24H_OS_REMEDIATION_MASTER_PLAN.md`, `BELL24H_OS_STAGING_CERTIFICATION_REPORT.md`, `OS-LIVE-01-LIVE-PLATFORM-ACTIVATION-REPORT.md`, `BELL24H_OS_AGENT_RUNTIME_AUDIT_MULTI_AGENT_WEB_AGENCY.md`. Tell me if you want them annotated.
+## 5. How it was verified — and what that does not prove
+1. **315 automated tests** (node:test via tsx; PGlite runs the **real** migrations, real `job_queue`, real `QueueManager` and handler). New this sprint: suppression 26 · audience/lists/segments/analytics/templates 24 · unsubscribe tokens 7 · provider unsubscribe headers 6 · diagnostics 9 + 9 · scheduler certifier 13 · UI flow helpers 34.
+2. **Mutation checks** (break → tests must fail → restore): earlier — webhook signature always-true (4 fail), verified-test gate removed (3 fail); this turn — LIKE escaping removed (caught), template in-use lock removed (caught).
+3. **Browser E2E** (`scripts/ch02-ui-harness/`, restart the harness server before each run): 63/63. Covers no-provider fail-closed, provider test double, worker path, schedule/execute, logs, templates (missing-placeholder warning → edit → in-use lock → rename allowed), lists, segments + preview, the **real public unsubscribe page** (GET does not unsubscribe; POST does), suppression list, suppressed member left out and counted, the unsubscribe-not-configured gate, analytics with no invented rates.
+4. **Stubbed in the harness:** login (always a seeded ADMIN); the provider ("Resend (TEST DOUBLE)", no network); the scheduler (`/__tick`). **A pass therefore proves UI + orchestration + fail-closed behaviour. It does not prove Resend/SMTP/Meta deliver, that real Supabase login/roles work in the UI, or that a scheduler triggers the worker.**
 
-## 7. Decisions and deviations from the brief (please review)
-1. **`communication_logs` is a view, not a table.** `communication_deliveries` already is the append-only per-attempt log (built in C0); a second log table would duplicate it, which `ARCHITECTURE_DECISIONS.md` forbids. The view gives the Logs tab one row per message.
-2. **Meta WhatsApp is a real adapter, not "future-ready only".** I had already chosen "port the site repo's provider/webhook pattern" earlier in this sprint. It is gated exactly like any provider (needs an allow-listed token + an operator-created provider row) and is reported as **UNVERIFIED**; it has never made a request to Meta.
-3. **MSG91 stays in the registry as an SMS/OTP stub.** The brief's provider list omits it; the earlier owner decision kept it for OTP. It cannot send. Say the word to remove it.
-4. **"Leads" = the organization's `contacts`.** There is no `leads` table in this schema (checked). Contacts carry no consent field, so campaign creation requires an explicit operator **consent attestation**, stored with the campaign.
-5. **Schedule / Execute require a *verified real test send*.** Stricter than the brief; it is what makes "fail closed" real.
-6. **Permission mapping** (mine, not pre-existing): send/test/schedule/execute/cancel = ADMIN, MANAGER; draft creation = +EDITOR; provider health check = ADMIN.
-7. **Route:** literal `/admin/communications` as a flat route (no nested admin router exists in the app).
-8. **Dependency/tooling:** `@electric-sql/pglite` (dev only) from C0; `playwright-core` is **not** added to the project (the harness README says `npm i --no-save`).
+## 6. Pending
+- **Industry Intelligence blank page** — not investigated (§2 #3).
+- **Knowledge Vault root cause** — needs the §3 #1 query result.
+- **Durable audit table** — `server/audit.ts` writes structured JSON to stdout only; the durable per-send record is `communication_messages` + `communication_deliveries`. Deferred by design (schema decision).
+- **Provider-reported failures after acceptance** (e.g. a WhatsApp delivery failure) update the message and Logs but not the campaign counters, which reflect provider acceptance.
+- **CSV import / export of lists and suppressions**, bounce/complaint **webhook ingestion for Resend** (so `bounced`/`complained` suppressions arrive automatically — today only unsubscribes and manual entries do): not built.
+- **Provider/channel mismatch is not constrained in SQL** (`provider='msg91', channel_type='whatsapp'` is schema-legal; fails closed today because MSG91 is a stub) — add a check in Sprint C2.
+- **Rate limits are in-memory per instance**; email bodies are HTML and not escaped (C0 carry-overs).
+- Queued after CH-02, read but not started: **Research Consolidation Sprint** (3 planning files) and **SEO & Positioning Plan** (1 file).
 
-## 8. Before this can be called working — owner checklist
-1. Verify the DB role: `SELECT current_user, rolbypassrls, rolsuper FROM pg_roles WHERE rolname = current_user;` (the migrations `REVOKE` from `anon`/`authenticated`).
-2. Apply, in order, in **staging first**: `add_communication_hub.sql`, `add_communication_campaigns.sql`.
-3. Ensure roles exist in `user_roles` (RBAC fails closed: no role → 403).
-4. Set `RESEND_API_KEY` (or `COMM_RESEND_*`) on the server; insert a provider row by SQL, e.g.
-   `INSERT INTO communication_providers (organization_id,name,provider,channel_type,credentials_secret_ref,priority,settings) VALUES ('<org>','Primary email','resend','email','RESEND_API_KEY',0,'{"fromAddress":"no-reply@<verified-domain>"}');`
-5. Set `CRON_SECRET`; create the InsForge schedule per the runbook.
-6. In the console: **Providers → Health check** (ADMIN), then a **campaign test** to an address you own; wait for **sent**. Only then does **Providers** show *verified*.
-7. WhatsApp additionally needs: Meta business verification, phone number ID, an **approved template**, `META_WHATSAPP_ACCESS_TOKEN`, `META_WHATSAPP_APP_SECRET`, `META_WHATSAPP_WEBHOOK_VERIFY_TOKEN`, and the webhook URL `/api/communications/webhooks/meta-whatsapp` registered in Meta.
+## 7. Blocked (cannot proceed without something outside this repo)
+| Item | Blocked on |
+|---|---|
+| Create the InsForge schedule / certify the Scheduler | A deployed build containing CH-02 (URL) and `CRON_SECRET` |
+| Apply `add_communication_hub.sql` then `add_communication_campaigns.sql` | Your decision + a staging DB; DB-role check (§3 #3). **Not applied anywhere.** |
+| Confirm the Knowledge Vault cause | Result of the read-only query in §3 #1 |
+| AI Providers 0/6 | Provider API keys (not code) |
+| Any "it really delivers" claim | A real provider credential and a test to an address you own |
 
-## 9. Known limitations and residual risks
-- **Throughput:** each worker tick runs at most **5 jobs** → ~5 messages/minute at a 1-minute cadence (a 1,000-recipient campaign ≈ 3½ h). Documented in the runbook; raising it is a code change not made here.
-- **No scheduler exists yet** (§2 #3): until one calls `/api/v1/workers/tick`, only Vercel's once-daily cron would run jobs. The Dashboard/Schedules tabs will show *overdue* / *no job has ever completed* — by design.
-- **Audit events are stdout-only** (repo limitation); durable records are the message/delivery rows.
-- **Provider-reported failure after acceptance** (e.g. a WhatsApp delivery failure) updates the message and Logs but does **not** change the campaign's counters, which reflect provider acceptance.
-- **WhatsApp outside the 24-hour window needs an approved template**; the adapter sends free text otherwise and reports Meta's rejection as a failure.
-- **Email bodies are HTML and not escaped**; template variables can inject markup (carried over from C0).
-- **Quotas count test sends** and are per organization/channel; per-minute rate limits are in-memory per instance (C0 limitation).
-- **UI not exercised with real Supabase login** (harness stubs auth); real-session behaviour rests on the existing `authedFetch` + server-side `requireAuth`, unchanged.
-- **Provider/channel mismatch is not constrained in SQL.** `communication_providers.channel_type` is not tied to the provider's own channel, so an operator insert of `provider='msg91', channel_type='whatsapp'` is schema-legal. Today it fails closed (the MSG91 stub throws). When MSG91 becomes real (Sprint C2) such a row would misroute WhatsApp traffic through an SMS provider — add a check (or validate in the worker) as part of C2.
-- **DECISION NEEDED — Meta WhatsApp scope.** The brief said "future-ready only"; a working Graph-API adapter and a mounted, signature-verified webhook route are committed (unverified, fail-closed, but present). If "future-ready" meant *interface only until approved*, revert `MetaWhatsAppCloudProvider.ts`, `whatsappWebhook.ts` and the two webhook routes to a stub. Not resolved by this report — it needs your yes/no.
-- **This branch is local only.** Nothing pushed; PR #1 (C0) is untouched.
+## 8. Requires Credentials (names only — never values in chat or git)
+`RESEND_API_KEY` (or `COMM_RESEND_*`) · `SMTP_PASSWORD` + host/user settings · `COMM_UNSUBSCRIBE_SECRET` (≥ 32 random chars) · `COMM_PUBLIC_BASE_URL` (public https origin of this server) · `CRON_SECRET` (same value as an InsForge secret) · WhatsApp: Meta business verification, phone-number ID, an **approved template**, `META_WHATSAPP_ACCESS_TOKEN`, `META_WHATSAPP_APP_SECRET`, `META_WHATSAPP_WEBHOOK_VERIFY_TOKEN`, webhook URL `/api/communications/webhooks/meta-whatsapp` registered in Meta. `.env.example` lists the names (empty).
 
-## 10. Files
-New: `add_communication_campaigns.sql`; `server/communication/{CampaignService,DashboardService,ProviderAdminService,whatsappWebhook}.ts`, `providers/MetaWhatsAppCloudProvider.ts`; 4 new test files (+ a shared HTTP harness) and 3 extended ones under `server/communication/__tests__/`; `src/pages/AdminCommunicationsPage.tsx`, `src/components/communications/*` (9), `src/lib/{communicationsApi,communicationsFlow}.ts`, `src/lib/__tests__/`, `src/types/communications.ts`; `scripts/ch02-ui-harness/*`; `docs/project/CH02_INSFORGE_WORKER_SCHEDULE_RUNBOOK.md`.
-Modified: `routes.ts`, `rbac.ts`, `validation.ts`, `types.ts`, `CommunicationService.ts`, `CommunicationJobHandler.ts`, `ProviderFactory.ts`, `StubProviders.ts`, `server.ts` (raw-body capture), `App.tsx`, `AppLayout.tsx`, `authedFetch.ts` (surfaces the server's `detail`), `package.json` (test script), `.env.example` (names only), `.gitignore`, 5 docs.
-Deleted: `src/pages/CommunicationsPage.tsx`.
+## 9. Ready For Production
+**Nothing is certified for production.** What is *code-complete and test-verified*, and therefore ready to be **staged** once §7 is unblocked: the campaign engine, templates (create/edit/lock), lists, segments, suppression list + unsubscribe, analytics, the admin console, diagnostics hardening, the scheduler certifier.
+Order to reach "working": (1) DB role check → (2) apply the two migrations in **staging** → (3) roles in `user_roles` → (4) set `RESEND_API_KEY`, `COMM_UNSUBSCRIBE_SECRET`, `COMM_PUBLIC_BASE_URL`, `CRON_SECRET` and insert a provider row (example in the runbook / previous section 8) → (5) create the InsForge schedule and run `certify-scheduler.ts --app-url …` until it says CERTIFIED → (6) **Providers → Health check**, then a campaign **test to an address you own** and wait for *sent* (only then does the console show *verified*) → (7) a real unsubscribe-link click end to end.
 
-## 11. Not started (queued behind CH-02)
-The two other briefs in the same message — **Research Consolidation Sprint** (`MASTER_RESEARCH_INDEX.md`, `MASTER_EXECUTION_BOARD_V2.md`, `IMPLEMENTATION_PRIORITY_MATRIX.md`) and the **SEO & Positioning Plan** (`BELL24H_OS_SEMANTIC_POSITIONING_PLAN.md`) — were read but not started, per "first continue as per above first".
+## 10. Decisions and deviations (please review)
+1. `communication_logs` is a **read-only view**, not a table (`communication_deliveries` already is the append-only per-attempt log; a second table would duplicate it).
+2. **Meta WhatsApp is a real adapter, not "future-ready only"** (§3 #6) — decision needed.
+3. **MSG91 remains an SMS/OTP stub** in the registry (cannot send); say the word to remove it.
+4. **"Leads" = the organization's `contacts`** (no `leads` table exists); contacts carry no consent field, so creation requires an explicit consent attestation stored with the campaign.
+5. Schedule/Execute require a **verified real test send**; suppression and unsubscribe fail closed — stricter than the brief, deliberately.
+6. Permissions (mine): send/test/schedule/execute/cancel = ADMIN, MANAGER; write (drafts, templates, lists, segments, manual suppressions) = +EDITOR; read = +VIEWER; provider health check and suppression **removal** = ADMIN.
+7. `playwright-core` is **not** a project dependency (`npm i --no-save` per the harness README); `@electric-sql/pglite` is a dev dependency (C0).
+
+## 11. Files
+**New:** `server/communication/{AnalyticsService,AudienceService,SuppressionService,TemplateService,unsubscribe}.ts`, `server/lib/vaultHealth.ts`, `src/lib/diagnosticsErrors.ts`, `scripts/certify-scheduler.ts`, UI `src/components/communications/{AudienceTab,SuppressionsTab,AnalyticsTab,CampaignAnalyticsPanel}.tsx`; tests `audience, suppression, unsubscribe.unit, unsubscribe.headers, diagnostics, certifyScheduler` (+ `diagnosticsErrors` under `src/lib/__tests__`).
+**Modified:** `add_communication_campaigns.sql` (section 6: suppressions, lists, list members, segments, campaign audience columns, recipient status `suppressed`, RLS/REVOKEs), `server.ts`, `server/communication/{routes,rbac,types,validation,CampaignService,CommunicationService}.ts`, providers (`SMTP`, `Resend`), `CommunicationJobHandler.ts`, `SystemDiagnosticsPage.tsx`, 5 vault components, `authedFetch.ts`, `CampaignWizard/TemplatesTab/CampaignDetailDialog`, `AdminCommunicationsPage`, `communicationsApi/Flow`, `types/communications.ts`, test harness helpers, `scripts/ch02-ui-harness/*`, `.env.example` (names only), runbook.
+**Withheld from git on purpose:** `BELL24H_OS_MASTER_READINESS_REPORT.md`, `GITHUB_PURGE_REQUEST.md`, `ORG_WIDE_COMMIT_VERIFICATION.md`, `SSH_KEY_EXPOSURE_REPORT.md` (untracked; not staged).

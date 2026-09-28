@@ -4,6 +4,8 @@
 -- communication_campaigns / communication_messages / communication_deliveries).
 -- Safe to re-run. NOT applied to any database by this change.
 --
+-- Also (section 6): suppression lists, contact lists and segments.
+--
 -- What this adds (and deliberately does NOT add):
 --   * communication_campaign_recipients — the audience SNAPSHOT for a campaign
 --     (one row per resolved recipient). New table: nothing existing models this.
@@ -48,7 +50,7 @@ CREATE TABLE IF NOT EXISTS public.communication_campaign_recipients (
     display_name TEXT,
     variables JSONB DEFAULT '{}'::jsonb, -- per-recipient template variables (first_name, last_name, company)
     status TEXT NOT NULL DEFAULT 'pending'
-        CHECK (status IN ('pending', 'queued', 'sent', 'failed', 'cancelled')),
+        CHECK (status IN ('pending', 'queued', 'sent', 'failed', 'cancelled', 'suppressed')),
     message_id UUID REFERENCES public.communication_messages(id),
     error_message TEXT,
     created_at TIMESTAMPTZ DEFAULT NOW(),
@@ -107,6 +109,95 @@ BEGIN
         IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = r) THEN
             EXECUTE format('REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON public.communication_campaign_recipients FROM %I', r);
             EXECUTE format('REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON public.communication_logs FROM %I', r);
+        END IF;
+    END LOOP;
+END
+$$;
+
+-- 6. Suppression lists, contact lists, segments (CH-02 audience management) --------------------------------
+-- Suppression: an address that must NEVER be sent to on a channel (unsubscribed, bounced, complained, or
+-- blocked by an operator). Enforced at THREE points: campaign creation (excluded from the audience), the
+-- send API (refused), and the worker immediately before the provider call (so an unsubscribe is honoured
+-- even for messages that were already queued).
+CREATE TABLE IF NOT EXISTS public.communication_suppressions (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    organization_id UUID NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE,
+    channel_type TEXT NOT NULL CHECK (channel_type IN ('email', 'sms', 'whatsapp')),
+    address TEXT NOT NULL, -- normalized: email lower-cased, phone E.164
+    reason TEXT NOT NULL CHECK (reason IN ('unsubscribed', 'bounced', 'complained', 'manual', 'invalid')),
+    source TEXT,           -- e.g. 'operator', 'unsubscribe_link'
+    note TEXT,
+    created_by UUID REFERENCES public.profiles(id),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (organization_id, channel_type, address)
+);
+CREATE INDEX IF NOT EXISTS idx_communication_suppressions_org_channel ON public.communication_suppressions (organization_id, channel_type);
+
+-- Contact lists: named, org-scoped groups of existing contacts (membership rows only; contacts are not copied).
+CREATE TABLE IF NOT EXISTS public.communication_lists (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    organization_id UUID NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    description TEXT,
+    created_by UUID REFERENCES public.profiles(id),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (organization_id, name)
+);
+CREATE TABLE IF NOT EXISTS public.communication_list_members (
+    list_id UUID NOT NULL REFERENCES public.communication_lists(id) ON DELETE CASCADE,
+    contact_id UUID NOT NULL REFERENCES public.contacts(id) ON DELETE CASCADE,
+    organization_id UUID NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE,
+    added_at TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (list_id, contact_id)
+);
+CREATE INDEX IF NOT EXISTS idx_communication_list_members_contact ON public.communication_list_members (contact_id);
+
+-- Segments: SAVED criteria (validated JSON: list ids, company/name text, created-date range) that are
+-- re-evaluated against contacts when a campaign is created. Criteria never become SQL text.
+CREATE TABLE IF NOT EXISTS public.communication_segments (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    organization_id UUID NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    criteria JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_by UUID REFERENCES public.profiles(id),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (organization_id, name)
+);
+
+-- Campaign audit of how the audience was chosen and what was left out.
+ALTER TABLE public.communication_campaigns
+    ADD COLUMN IF NOT EXISTS audience JSONB,          -- { type: 'contacts' | 'list' | 'segment', id?: uuid }
+    ADD COLUMN IF NOT EXISTS audience_summary JSONB;  -- { requested, resolved, notFound, invalidAddress, duplicate, suppressed }
+
+-- Recipients can also be skipped at send time because they were suppressed AFTER the campaign was created.
+ALTER TABLE public.communication_campaign_recipients DROP CONSTRAINT IF EXISTS communication_campaign_recipients_status_check;
+ALTER TABLE public.communication_campaign_recipients ADD CONSTRAINT communication_campaign_recipients_status_check
+    CHECK (status IN ('pending', 'queued', 'sent', 'failed', 'cancelled', 'suppressed'));
+
+-- Same write model as everything else here: tenants READ their own rows, only the server writes.
+ALTER TABLE public.communication_suppressions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.communication_lists ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.communication_list_members ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.communication_segments ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Org isolation select" ON public.communication_suppressions;
+DROP POLICY IF EXISTS "Org isolation select" ON public.communication_lists;
+DROP POLICY IF EXISTS "Org isolation select" ON public.communication_list_members;
+DROP POLICY IF EXISTS "Org isolation select" ON public.communication_segments;
+CREATE POLICY "Org isolation select" ON public.communication_suppressions FOR SELECT USING (organization_id = public.get_current_org_id());
+CREATE POLICY "Org isolation select" ON public.communication_lists FOR SELECT USING (organization_id = public.get_current_org_id());
+CREATE POLICY "Org isolation select" ON public.communication_list_members FOR SELECT USING (organization_id = public.get_current_org_id());
+CREATE POLICY "Org isolation select" ON public.communication_segments FOR SELECT USING (organization_id = public.get_current_org_id());
+
+DO $$
+DECLARE
+    r TEXT;
+    t TEXT;
+BEGIN
+    FOREACH r IN ARRAY ARRAY['anon', 'authenticated'] LOOP
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = r) THEN
+            FOREACH t IN ARRAY ARRAY['communication_suppressions', 'communication_lists', 'communication_list_members', 'communication_segments'] LOOP
+                EXECUTE format('REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON public.%I FROM %I', t, r);
+            END LOOP;
         END IF;
     END LOOP;
 END

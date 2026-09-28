@@ -7,7 +7,7 @@
  * Every action is re-validated server-side.
  */
 
-import type { CampaignStatus, CommCampaignDetail, CommChannel } from "@/types/communications";
+import type { CampaignStatus, CommCampaignDetail, CommChannel, SegmentCriteria } from "@/types/communications";
 
 export type StepState = "done" | "current" | "blocked" | "todo";
 
@@ -37,6 +37,9 @@ export function availableActions(d: CommCampaignDetail): AvailableActions {
   const reasons: AvailableActions["reasons"] = {};
 
   const gate = (): string | undefined => {
+    if (!d.unsubscribeReady) {
+      return "Email campaigns need a working unsubscribe link, and the server has no COMM_UNSUBSCRIBE_SECRET / COMM_PUBLIC_BASE_URL configured.";
+    }
     if (!d.campaign.consent_confirmed_at) return "Recipient consent has not been confirmed.";
     if (d.campaign.total_recipients < 1) return "The campaign has no recipients.";
     if (!d.testVerified) {
@@ -150,7 +153,7 @@ export function minScheduleLocal(now: Date = new Date()): string {
 /** Share of recipients that reached a final state, for the progress bar. */
 export function progressPercent(counts: Partial<Record<string, number>>, total: number): number {
   if (total <= 0) return 0;
-  const done = (counts.sent ?? 0) + (counts.failed ?? 0) + (counts.cancelled ?? 0);
+  const done = (counts.sent ?? 0) + (counts.failed ?? 0) + (counts.cancelled ?? 0) + (counts.suppressed ?? 0);
   return Math.min(100, Math.round((done / total) * 100));
 }
 
@@ -208,3 +211,66 @@ export function pipelineWarnings(
   }
   return notes;
 }
+
+// ---- audience / suppression helpers ------------------------------------------------------------------
+
+export const MAX_SUPPRESSION_BATCH = 1000;
+
+/**
+ * Splits pasted text into distinct addresses (newlines, commas, semicolons, whitespace). Case is kept —
+ * the server normalizes — but exact duplicates are removed so the count the operator sees is honest.
+ */
+export function parseAddressList(text: string): { addresses: string[]; tooMany: boolean } {
+  const seen = new Set<string>();
+  for (const part of text.split(/[\s,;]+/)) {
+    const v = part.trim();
+    if (v) seen.add(v);
+  }
+  const all = [...seen];
+  return { addresses: all.slice(0, MAX_SUPPRESSION_BATCH), tooMany: all.length > MAX_SUPPRESSION_BATCH };
+}
+
+export interface CriteriaForm {
+  listIds: string[];
+  companyContains: string;
+  nameContains: string;
+  /** `<input type="date">` values (YYYY-MM-DD) or "". */
+  createdAfter: string;
+  createdBefore: string;
+}
+
+export const emptyCriteriaForm = (): CriteriaForm => ({ listIds: [], companyContains: "", nameContains: "", createdAfter: "", createdBefore: "" });
+
+/** Only the conditions the operator actually filled in are sent; an all-empty form yields null (the server refuses empty criteria). */
+export function criteriaFromForm(f: CriteriaForm): SegmentCriteria | null {
+  const c: SegmentCriteria = {};
+  if (f.listIds.length > 0) c.listIds = f.listIds;
+  if (f.companyContains.trim()) c.companyContains = f.companyContains.trim();
+  if (f.nameContains.trim()) c.nameContains = f.nameContains.trim();
+  if (f.createdAfter) c.createdAfter = f.createdAfter;
+  if (f.createdBefore) c.createdBefore = f.createdBefore;
+  return Object.keys(c).length > 0 ? c : null;
+}
+
+/** One-line description of saved criteria for the segments table. */
+export function describeCriteria(c: SegmentCriteria, listNames: Record<string, string> = {}): string {
+  const parts: string[] = [];
+  if (c.listIds?.length) parts.push(`in list: ${c.listIds.map((id) => listNames[id] ?? "(deleted list)").join(" or ")}`);
+  if (c.companyContains) parts.push(`company contains "${c.companyContains}"`);
+  if (c.nameContains) parts.push(`name contains "${c.nameContains}"`);
+  if (c.createdAfter) parts.push(`added after ${c.createdAfter.slice(0, 10)}`);
+  if (c.createdBefore) parts.push(`added before ${c.createdBefore.slice(0, 10)}`);
+  return parts.join(" · ") || "(no conditions)";
+}
+
+/** Email templates must carry the unsubscribe placeholder; the server refuses a campaign otherwise. */
+export const templateHasUnsubscribe = (body: string) => body.includes("{{unsubscribe_url}}");
+
+/** Honest label for what a delivery figure means on this channel. */
+export function deliveryTrackingNote(t: "provider_acceptance_only" | "webhook"): string {
+  return t === "webhook"
+    ? "Delivery is reported by Meta's webhook (once configured and verified)."
+    : "Only provider acceptance is known: the provider took the message. Delivery, opens and clicks are not tracked, so no such rates are shown.";
+}
+
+export const percentText = (v: number | null): string => (v === null ? "n/a" : `${v}%`);

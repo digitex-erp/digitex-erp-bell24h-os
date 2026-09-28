@@ -20,6 +20,8 @@ import { emitAuditEvent, newRequestId } from "../../audit.js";
 import { ProviderFactory, MissingSecretError, SecretNotAllowedError, UnknownProviderError } from "../../communication/providers/ProviderFactory.js";
 import type { CommunicationMessage } from "../../communication/types.js";
 import { CampaignService } from "../../communication/CampaignService.js";
+import { findSuppression } from "../../communication/SuppressionService.js";
+import { buildUnsubscribeUrl, getUnsubscribeConfig } from "../../communication/unsubscribe.js";
 
 /**
  * Two job shapes share the "communication" job type:
@@ -82,6 +84,41 @@ export class CommunicationJobHandler {
       return { skipped: true, reason: "cancelled" };
     }
 
+    // Suppression is checked AGAIN here, immediately before any provider is contacted: an address that
+    // unsubscribed (or was blocked) AFTER this message was queued must not receive it.
+    const suppressedReason = await findSuppression(this.pool, organization_id, message.channel_type, message.recipient);
+    if (suppressedReason) {
+      await this.pool.query(
+        `UPDATE public.communication_messages SET status = 'cancelled', error_message = $1, updated_at = NOW() WHERE id = $2 AND organization_id = $3`,
+        [`suppressed: ${suppressedReason}`, message.id, organization_id],
+      );
+      emitAuditEvent({
+        actor: "service:worker",
+        organizationId: organization_id,
+        action: "job.communication.suppressed",
+        targetType: "communication_message",
+        targetId: message.id,
+        outcome: "denied",
+        requestId,
+        metadata: { reason: suppressedReason },
+      });
+      await this.reconcileCampaign(message);
+      return { skipped: true, reason: "suppressed" };
+    }
+
+    // Campaign email carries a signed one-click unsubscribe link. Without the configuration to build it the
+    // message is NOT sent (fail closed) — sending marketing email with no way to opt out is not an option.
+    let unsubscribeUrl: string | undefined;
+    if (message.campaign_id && message.channel_type === "email") {
+      const cfg = getUnsubscribeConfig();
+      if (!cfg) {
+        const errorMessage = "UNSUBSCRIBE_NOT_CONFIGURED: set COMM_UNSUBSCRIBE_SECRET and COMM_PUBLIC_BASE_URL before sending campaign email.";
+        await this.markFailed(job, message, errorMessage, requestId);
+        throw new Error(errorMessage);
+      }
+      unsubscribeUrl = buildUnsubscribeUrl(cfg, { organizationId: organization_id, channel: "email", address: message.recipient.toLowerCase() });
+    }
+
     const providersRes = await this.pool.query(
       `SELECT id, provider, credentials_secret_ref, settings, priority
        FROM public.communication_providers
@@ -112,6 +149,7 @@ export class CommunicationJobHandler {
             body: message.body || "",
             // Stable across worker retries of the same send; a manual retry gets a new value.
             idempotencyKey: `comm-msg:${message.id}:${message.retry_count}`,
+            unsubscribeUrl,
           },
           resolved,
         );

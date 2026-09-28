@@ -6,7 +6,7 @@ export type MessageStatus = "queued" | "scheduled" | "sending" | "sent" | "deliv
 
 export type CampaignStatus = "draft" | "scheduled" | "running" | "paused" | "completed" | "failed" | "cancelled";
 
-export type RecipientStatus = "pending" | "queued" | "sent" | "failed" | "cancelled";
+export type RecipientStatus = "pending" | "queued" | "sent" | "failed" | "cancelled" | "suppressed";
 
 export interface CommTemplate {
   id: string;
@@ -45,6 +45,8 @@ export interface CommCampaign {
   started_at: string | null;
   completed_at: string | null;
   paused_reason: string | null;
+  audience: { type: "contacts" | "list" | "segment"; id?: string } | null;
+  audience_summary: CommAudienceSummary | null;
   created_at: string;
 }
 
@@ -54,6 +56,8 @@ export interface CommCampaignDetail {
   lastTest: { id: string; status: string; recipient: string; error_message: string | null; created_at: string } | null;
   /** True only once a real test message reached sent/delivered. */
   testVerified: boolean;
+  /** Email campaigns need a signed unsubscribe link; false = the server has no COMM_UNSUBSCRIBE_SECRET / COMM_PUBLIC_BASE_URL. */
+  unsubscribeReady: boolean;
 }
 
 export interface CommAudienceSummary {
@@ -62,6 +66,8 @@ export interface CommAudienceSummary {
   notFound: number;
   invalidAddress: number;
   duplicate: number;
+  /** Left out because the address is on the organization's suppression list. */
+  suppressed: number;
 }
 
 export interface CommRecipient {
@@ -153,4 +159,80 @@ export interface CommSchedule {
   job_due_at: string | null;
   job_completed_at: string | null;
   overdue: boolean;
+}
+
+export type SuppressionReason = "unsubscribed" | "bounced" | "complained" | "manual" | "invalid";
+
+export interface CommSuppression {
+  id: string;
+  channel_type: CommChannel;
+  address: string;
+  reason: SuppressionReason;
+  source: string | null;
+  note: string | null;
+  created_at: string;
+}
+
+export interface CommList {
+  id: string;
+  name: string;
+  description: string | null;
+  created_at: string;
+  member_count: number;
+}
+
+export interface CommListMember {
+  id: string;
+  first_name: string | null;
+  last_name: string | null;
+  email: string | null;
+  phone: string | null;
+  company: string | null;
+}
+
+export interface SegmentCriteria {
+  listIds?: string[];
+  companyContains?: string;
+  nameContains?: string;
+  createdAfter?: string;
+  createdBefore?: string;
+}
+
+export interface CommSegment {
+  id: string;
+  name: string;
+  criteria: SegmentCriteria;
+  created_at: string;
+}
+
+export interface CommSegmentPreview {
+  matched: number;
+  suppressed: number;
+  sample: { id: string; name: string; company: string | null }[];
+}
+
+export type DeliveryTracking = "provider_acceptance_only" | "webhook";
+
+export interface CommCampaignAnalytics {
+  campaign: { id: string; name: string; channel: CommChannel; status: CampaignStatus; totalRecipients: number; startedAt: string | null; completedAt: string | null };
+  audience: CommAudienceSummary | null;
+  recipients: Record<string, number>;
+  messages: Record<string, number>;
+  rates: { acceptedPercent: number | null; failedPercent: number | null; deliveredPercent: number | null; suppressedPercent: number | null };
+  deliveryTracking: DeliveryTracking;
+  totals: { messages: number; accepted: number; failed: number; providerAttempts: number; messagesAttempted: number };
+  byProvider: { provider: string; n: number }[];
+  topFailureReasons: { reason: string; n: number }[];
+  sentByHour: { hour: string; count: number }[];
+}
+
+export interface CommOrgAnalytics {
+  days: number;
+  daily: { day: string; accepted: number; failed: number; total: number }[];
+  byChannel: Record<string, Record<string, number>>;
+  recentCampaigns: { id: string; name: string; channel_type: CommChannel; status: CampaignStatus; total_recipients: number; sent_count: number; failed_count: number; created_at: string }[];
+  topFailureReasons: { reason: string; n: number }[];
+  suppressions: { channel_type: CommChannel; reason: SuppressionReason; n: number }[];
+  audience: { lists: number; segments: number };
+  deliveryTracking: Record<CommChannel, DeliveryTracking>;
 }

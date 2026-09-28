@@ -29,6 +29,9 @@ import type pg from "pg";
 import { QueueManager } from "../queue/QueueManager.js";
 import { emitAuditEvent, newRequestId } from "../audit.js";
 import { CommunicationService, QuotaExceededError } from "./CommunicationService.js";
+import { AudienceService } from "./AudienceService.js";
+import { SuppressedRecipientError } from "./SuppressionService.js";
+import { buildUnsubscribeUrl, getUnsubscribeConfig } from "./unsubscribe.js";
 import type { ChannelType, CommunicationMessage } from "./types.js";
 import {
   CommunicationValidationError,
@@ -76,9 +79,21 @@ export interface CampaignRow {
   started_at: string | null;
   completed_at: string | null;
   paused_reason: string | null;
+  audience: { type: "contacts" | "list" | "segment"; id?: string } | null;
+  audience_summary: CampaignAudienceSummary | null;
   created_by: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface CampaignAudienceSummary {
+  requested: number;
+  resolved: number;
+  notFound: number;
+  invalidAddress: number;
+  duplicate: number;
+  /** Excluded because the address is on the organization's suppression list. */
+  suppressed: number;
 }
 
 export interface LeadRow {
@@ -98,6 +113,8 @@ export interface CampaignDetail {
   lastTest: { id: string; status: string; recipient: string; error_message: string | null; created_at: string } | null;
   /** True only when a real test message has reached 'sent' / 'delivered'. Scheduling and execution require it. */
   testVerified: boolean;
+  /** Email campaigns need a signed unsubscribe link; false means COMM_UNSUBSCRIBE_SECRET / COMM_PUBLIC_BASE_URL are not set. */
+  unsubscribeReady: boolean;
 }
 
 export interface CreateCampaignInput {
@@ -106,14 +123,17 @@ export interface CreateCampaignInput {
   name: unknown;
   channelType: unknown;
   templateId: unknown;
-  contactIds: unknown;
+  /** Exactly ONE of contactIds / listId / segmentId selects the audience. */
+  contactIds?: unknown;
+  listId?: unknown;
+  segmentId?: unknown;
   variables?: unknown;
   consentConfirmed: unknown;
 }
 
 export interface CreateCampaignResult {
   campaign: CampaignRow;
-  audience: { requested: number; resolved: number; notFound: number; invalidAddress: number; duplicate: number };
+  audience: CampaignAudienceSummary;
 }
 
 const MAX_RECIPIENTS = () => {
@@ -145,11 +165,29 @@ export class CampaignService {
   private pool: pg.Pool;
   private queue: QueueManager;
   private comms: CommunicationService;
+  private audience: AudienceService;
 
   constructor(pool: pg.Pool) {
     this.pool = pool;
     this.queue = QueueManager.getInstance(pool);
     this.comms = new CommunicationService(pool);
+    this.audience = new AudienceService(pool);
+  }
+
+  /**
+   * The variables that make an email campaign message legal to send: the recipient's signed one-click
+   * unsubscribe link. Throws when the link cannot be built — email campaigns fail closed without it.
+   */
+  private unsubscribeVariables(campaign: Pick<CampaignRow, "organization_id" | "channel_type">, address: string): Record<string, string> {
+    if (campaign.channel_type !== "email") return {};
+    const cfg = getUnsubscribeConfig();
+    if (!cfg) {
+      throw new CampaignStateError(
+        "unsubscribe_not_configured",
+        "Email campaigns need a one-click unsubscribe link: set COMM_UNSUBSCRIBE_SECRET (16+ characters) and COMM_PUBLIC_BASE_URL on the server.",
+      );
+    }
+    return { unsubscribe_url: buildUnsubscribeUrl(cfg, { organizationId: campaign.organization_id, channel: "email", address: address.toLowerCase() }) };
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -205,7 +243,26 @@ export class CampaignService {
     const name = validateCampaignName(input.name);
     const channelType = validateChannel(input.channelType);
     const templateId = validateUuid(input.templateId, "templateId");
-    const contactIds = validateUuidList(input.contactIds, "contactIds", MAX_RECIPIENTS());
+    const provided = [input.contactIds !== undefined, input.listId !== undefined, input.segmentId !== undefined].filter(Boolean).length;
+    if (provided !== 1) {
+      throw new CommunicationValidationError("audience", "provide exactly one of contactIds, listId or segmentId");
+    }
+    let audienceRef: NonNullable<CampaignRow["audience"]> = { type: "contacts" };
+    let contactIds: string[];
+    if (input.listId !== undefined) {
+      const listId = validateUuid(input.listId, "listId");
+      contactIds = await this.audience.resolveList(organizationId, channelType, listId);
+      audienceRef = { type: "list", id: listId };
+    } else if (input.segmentId !== undefined) {
+      const segmentId = validateUuid(input.segmentId, "segmentId");
+      contactIds = await this.audience.resolveSegment(organizationId, channelType, segmentId);
+      audienceRef = { type: "segment", id: segmentId };
+    } else {
+      contactIds = validateUuidList(input.contactIds, "contactIds", MAX_RECIPIENTS());
+    }
+    if (contactIds.length === 0) {
+      throw new CommunicationValidationError(audienceRef.type === "contacts" ? "contactIds" : audienceRef.type === "list" ? "listId" : "segmentId", `no contact has a usable ${channelType} address`);
+    }
     const variables = validateVariables(input.variables);
     if (input.consentConfirmed !== true) {
       throw new CommunicationValidationError(
@@ -215,12 +272,19 @@ export class CampaignService {
     }
 
     const tpl = await this.pool.query(
-      `SELECT id, channel_type FROM public.communication_templates WHERE id = $1 AND organization_id = $2 AND is_active = true`,
+      `SELECT id, channel_type, body FROM public.communication_templates WHERE id = $1 AND organization_id = $2 AND is_active = true`,
       [templateId, organizationId],
     );
     if (tpl.rows.length === 0) throw new CommunicationValidationError("templateId", "template not found or inactive for this organization");
     if (tpl.rows[0].channel_type !== channelType) {
       throw new CommunicationValidationError("templateId", `template is for channel "${tpl.rows[0].channel_type}", not "${channelType}"`);
+    }
+
+    if (channelType === "email" && !/\{\{\s*unsubscribe_url\s*\}\}/.test(String(tpl.rows[0].body))) {
+      throw new CommunicationValidationError(
+        "templateId",
+        "email campaign templates must include the {{unsubscribe_url}} placeholder (every campaign email carries a one-click unsubscribe link)",
+      );
     }
 
     const found = await this.pool.query(
@@ -255,15 +319,36 @@ export class CampaignService {
         variables: JSON.stringify({ first_name: c.first_name ?? "", last_name: c.last_name ?? "", company: c.company ?? "" }),
       });
     }
-    const audience = {
+    // Suppressed addresses never enter the audience (checked again at send time for later suppressions).
+    let suppressed = 0;
+    if (rows.length > 0) {
+      const sup = await this.pool.query(
+        `SELECT address FROM public.communication_suppressions WHERE organization_id = $1 AND channel_type = $2 AND address = ANY($3::text[])`,
+        [organizationId, channelType, rows.map((r) => (channelType === "email" ? r.recipient.toLowerCase() : r.recipient))],
+      );
+      const blocked = new Set((sup.rows as { address: string }[]).map((r) => r.address));
+      for (let i = rows.length - 1; i >= 0; i--) {
+        if (blocked.has(channelType === "email" ? rows[i].recipient.toLowerCase() : rows[i].recipient)) {
+          rows.splice(i, 1);
+          suppressed++;
+        }
+      }
+    }
+    const audience: CampaignAudienceSummary = {
       requested: contactIds.length,
       resolved: rows.length,
       notFound: contactIds.length - found.rows.length,
       invalidAddress,
       duplicate,
+      suppressed,
     };
     if (rows.length === 0) {
-      throw new CommunicationValidationError("contactIds", `none of the selected leads has a valid ${channelType} address`);
+      throw new CommunicationValidationError(
+        "audience",
+        suppressed > 0
+          ? `every matching lead is suppressed or has no valid ${channelType} address (${suppressed} suppressed)`
+          : `none of the selected leads has a valid ${channelType} address`,
+      );
     }
 
     const client = await this.pool.connect();
@@ -272,9 +357,9 @@ export class CampaignService {
       const created = await client.query(
         `INSERT INTO public.communication_campaigns
            (organization_id, name, channel_type, template_id, status, total_recipients, variables,
-            consent_confirmed_by, consent_confirmed_at, created_by)
-         VALUES ($1,$2,$3,$4,'draft',$5,$6,$7,NOW(),$7) RETURNING *`,
-        [organizationId, name, channelType, templateId, rows.length, JSON.stringify(variables), input.createdBy],
+            consent_confirmed_by, consent_confirmed_at, created_by, audience, audience_summary)
+         VALUES ($1,$2,$3,$4,'draft',$5,$6,$7,NOW(),$7,$8,$9) RETURNING *`,
+        [organizationId, name, channelType, templateId, rows.length, JSON.stringify(variables), input.createdBy, JSON.stringify(audienceRef), JSON.stringify(audience)],
       );
       const campaign = created.rows[0] as CampaignRow;
       await client.query(
@@ -301,7 +386,7 @@ export class CampaignService {
         targetId: campaign.id,
         outcome: "success",
         requestId,
-        metadata: { channelType, ...audience, consentAttested: true },
+        metadata: { channelType, ...audience, audienceType: audienceRef.type, consentAttested: true },
       });
       return { campaign, audience };
     } catch (err) {
@@ -353,7 +438,7 @@ export class CampaignService {
       `SELECT status, COUNT(*)::int AS n FROM public.communication_campaign_recipients WHERE campaign_id = $1 GROUP BY status`,
       [campaign.id],
     );
-    const recipientCounts: Record<string, number> = { pending: 0, queued: 0, sent: 0, failed: 0, cancelled: 0 };
+    const recipientCounts: Record<string, number> = { pending: 0, queued: 0, sent: 0, failed: 0, cancelled: 0, suppressed: 0 };
     for (const r of counts.rows as { status: string; n: number }[]) recipientCounts[r.status] = r.n;
 
     let lastTest: CampaignDetail["lastTest"] = null;
@@ -364,7 +449,13 @@ export class CampaignService {
       );
       lastTest = (t.rows[0] as CampaignDetail["lastTest"]) ?? null;
     }
-    return { campaign, recipientCounts, lastTest, testVerified: lastTest !== null && ["sent", "delivered"].includes(lastTest.status) };
+    return {
+      campaign,
+      recipientCounts,
+      lastTest,
+      testVerified: lastTest !== null && ["sent", "delivered"].includes(lastTest.status),
+      unsubscribeReady: campaign.channel_type !== "email" || getUnsubscribeConfig() !== null,
+    };
   }
 
   async listRecipients(
@@ -378,7 +469,7 @@ export class CampaignService {
     const params: unknown[] = [campaign.id, organizationId];
     let where = "campaign_id = $1 AND organization_id = $2";
     if (opts.status !== undefined) {
-      const allowed = ["pending", "queued", "sent", "failed", "cancelled"];
+      const allowed = ["pending", "queued", "sent", "failed", "cancelled", "suppressed"];
       if (typeof opts.status !== "string" || !allowed.includes(opts.status)) {
         throw new CommunicationValidationError("status", `must be one of: ${allowed.join(", ")}`);
       }
@@ -424,7 +515,13 @@ export class CampaignService {
       recipient,
       templateId: campaign.template_id,
       campaignId: campaign.id,
-      variables: { ...campaign.variables, first_name: "Test", last_name: "Recipient", company: "Test Company" } as Record<string, unknown>,
+      variables: {
+        ...campaign.variables,
+        first_name: "Test",
+        last_name: "Recipient",
+        company: "Test Company",
+        ...this.unsubscribeVariables(campaign, recipient),
+      } as Record<string, unknown>,
       createdBy: actor,
       idempotencyKey,
       isTest: true,
@@ -459,6 +556,12 @@ export class CampaignService {
       throw new CampaignStateError("consent_missing", "Recipient consent / lawful basis has not been confirmed for this campaign.");
     }
     if (campaign.total_recipients < 1) throw new CampaignStateError("no_recipients", "Campaign has no recipients.");
+    if (campaign.channel_type === "email" && !getUnsubscribeConfig()) {
+      throw new CampaignStateError(
+        "unsubscribe_not_configured",
+        "Email campaigns need a one-click unsubscribe link: set COMM_UNSUBSCRIBE_SECRET (16+ characters) and COMM_PUBLIC_BASE_URL on the server.",
+      );
+    }
     const detail = await this.getCampaign(campaign.organization_id, campaign.id);
     if (!detail.testVerified) {
       throw new CampaignStateError(
@@ -639,7 +742,26 @@ export class CampaignService {
 
     let queued = 0;
     let failed = 0;
+    let suppressedNow = 0;
     let pausedForQuota = false;
+    if (campaign.channel_type === "email" && !getUnsubscribeConfig()) {
+      // Configuration was removed after scheduling: stop (resumable) rather than send email with no opt-out.
+      await this.pool.query(
+        `UPDATE public.communication_campaigns SET status = 'paused', paused_reason = 'unsubscribe_not_configured', updated_at = NOW() WHERE id = $1 AND organization_id = $2`,
+        [campaign.id, organizationId],
+      );
+      emitAuditEvent({
+        actor: "service:worker",
+        organizationId,
+        action: "communication.campaign.paused",
+        targetType: "communication_campaign",
+        targetId: campaign.id,
+        outcome: "failure",
+        requestId,
+        metadata: { reason: "unsubscribe_not_configured", queued: 0, failed: 0 },
+      });
+      return { queued: 0, failed: 0, paused: "unsubscribe_not_configured" };
+    }
     for (const r of batch.rows as { id: string; recipient: string; variables: Record<string, unknown> }[]) {
       try {
         const msg = await this.comms.sendMessage({
@@ -648,7 +770,7 @@ export class CampaignService {
           recipient: r.recipient,
           templateId: campaign.template_id,
           campaignId: campaign.id,
-          variables: { ...campaign.variables, ...r.variables },
+          variables: { ...campaign.variables, ...r.variables, ...this.unsubscribeVariables(campaign, r.recipient) },
           createdBy: campaign.created_by ?? undefined,
           idempotencyKey: `camp:${campaign.id}:${r.id}`,
         });
@@ -661,6 +783,15 @@ export class CampaignService {
         if (err instanceof QuotaExceededError) {
           pausedForQuota = true;
           break;
+        }
+        if (err instanceof SuppressedRecipientError) {
+          // Suppressed AFTER the campaign was created (e.g. they just unsubscribed): skip, never send.
+          await this.pool.query(
+            `UPDATE public.communication_campaign_recipients SET status = 'suppressed', error_message = $1, updated_at = NOW() WHERE id = $2`,
+            [err.message.slice(0, 500), r.id],
+          );
+          suppressedNow++;
+          continue;
         }
         if (err instanceof CommunicationValidationError) {
           // This recipient can never be sent (e.g. the template renders an invalid subject for them).
@@ -723,9 +854,9 @@ export class CampaignService {
       targetId: campaign.id,
       outcome: "success",
       requestId,
-      metadata: { queued, failed, remaining: remaining.rows[0].n },
+      metadata: { queued, failed, suppressed: suppressedNow, remaining: remaining.rows[0].n },
     });
-    return { queued, failed, remaining: remaining.rows[0].n };
+    return { queued, failed, suppressed: suppressedNow, remaining: remaining.rows[0].n };
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -739,9 +870,9 @@ export class CampaignService {
                          WHEN 'sent' THEN 'sent'
                          WHEN 'delivered' THEN 'sent'
                          WHEN 'dead_letter' THEN 'failed'
-                         WHEN 'cancelled' THEN 'cancelled'
+                         WHEN 'cancelled' THEN CASE WHEN m.error_message LIKE 'suppressed:%' THEN 'suppressed' ELSE 'cancelled' END
                          ELSE r.status END,
-              error_message = CASE WHEN m.status = 'dead_letter' THEN LEFT(m.error_message, 500) ELSE r.error_message END,
+              error_message = CASE WHEN m.status = 'dead_letter' OR m.error_message LIKE 'suppressed:%' THEN LEFT(m.error_message, 500) ELSE r.error_message END,
               updated_at = NOW()
          FROM public.communication_messages m
         WHERE r.message_id = m.id AND r.campaign_id = $1 AND r.organization_id = $2 AND r.status IN ('queued')`,

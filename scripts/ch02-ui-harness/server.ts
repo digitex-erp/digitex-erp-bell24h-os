@@ -16,6 +16,11 @@ import type { ProviderAdapter } from "../../server/communication/types.js";
 import type { AuthedRequest } from "../../server/middleware/requireAuth.js";
 
 const PORT = Number(process.env.PORT || 4179);
+// Campaign email needs a signed unsubscribe link; the harness points it at itself so the real public page can be exercised.
+const UNSUB_SECRET = "harness-unsubscribe-secret-0123456789abcdef";
+process.env.COMM_UNSUBSCRIBE_SECRET = UNSUB_SECRET;
+process.env.COMM_PUBLIC_BASE_URL = `http://127.0.0.1:${PORT}`;
+const lastUnsubscribeUrl = new Map<string, string>();
 const t = await createTestDb();
 const org = await seedOrg(t.db, "Acme Demo Org");
 const admin = await seedUser(t.db, org, ["ADMIN"]);
@@ -25,7 +30,10 @@ let mode: "none" | "ok" | "fail" = "none";
 const fake: ProviderAdapter = {
   provider: "resend",
   channelType: "email",
-  send: async () => (mode === "fail" ? { success: false, errorMessage: "Resend API 401: invalid API key (test double)" } : { success: true, providerMessageId: `double-${Date.now()}` }),
+  send: async (msg) => {
+    if (msg.unsubscribeUrl) lastUnsubscribeUrl.set(msg.recipient, msg.unsubscribeUrl);
+    return mode === "fail" ? { success: false, errorMessage: "Resend API 401: invalid API key (test double)" } : { success: true, providerMessageId: `double-${Date.now()}` };
+  },
   status: async () => ({ status: "sent" }),
   validate: async () => ({ valid: true }),
   healthCheck: async () => ({ healthy: mode !== "fail", detail: mode === "fail" ? "test double: down" : undefined, checkedAt: new Date().toISOString() }),
@@ -69,6 +77,23 @@ app.get("/__provider", async (req, res) => {
     );
   }
   res.send(`provider mode = ${m}`);
+});
+// Switches the server's unsubscribe configuration off/on, to show the fail-closed gate.
+app.get("/__unsub", (req, res) => {
+  if (req.query.mode === "off") {
+    delete process.env.COMM_UNSUBSCRIBE_SECRET;
+    delete process.env.COMM_PUBLIC_BASE_URL;
+  } else {
+    process.env.COMM_UNSUBSCRIBE_SECRET = UNSUB_SECRET;
+    process.env.COMM_PUBLIC_BASE_URL = `http://127.0.0.1:${PORT}`;
+  }
+  res.send(`unsubscribe config ${req.query.mode === "off" ? "off" : "on"}`);
+});
+// The unsubscribe link the (test-double) provider was handed for a recipient — what the email footer would carry.
+app.get("/__unsub-url", (req, res) => {
+  const u = lastUnsubscribeUrl.get(String(req.query.to));
+  if (!u) return void res.status(404).send("no link captured");
+  res.send(u);
 });
 app.get("/__tick", async (_req, res) => {
   const jobs = await t.db.query<any>(

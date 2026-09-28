@@ -3,13 +3,21 @@ import assert from "node:assert/strict";
 import {
   addressFor,
   availableActions,
+  criteriaFromForm,
+  deliveryTrackingNote,
+  describeCriteria,
+  emptyCriteriaForm,
   flowSteps,
   leadName,
   localDateTimeToIso,
+  MAX_SUPPRESSION_BATCH,
   minScheduleLocal,
+  parseAddressList,
+  percentText,
   progressPercent,
   shouldPoll,
   statusTone,
+  templateHasUnsubscribe,
 } from "../communicationsFlow.js";
 import type { CampaignStatus, CommCampaignDetail } from "../../types/communications.js";
 
@@ -31,12 +39,15 @@ function detail(over: Partial<CommCampaignDetail["campaign"]> & { lastTest?: Com
       started_at: null,
       completed_at: null,
       paused_reason: null,
+      audience: { type: "contacts" },
+      audience_summary: null,
       created_at: "2026-09-28T00:00:00Z",
       ...campaign,
     },
-    recipientCounts: { pending: 3, queued: 0, sent: 0, failed: 0, cancelled: 0 },
+    recipientCounts: { pending: 3, queued: 0, sent: 0, failed: 0, cancelled: 0, suppressed: 0 },
     lastTest,
     testVerified: verified,
+    unsubscribeReady: true,
   };
 }
 const sentTest = { id: "m1", status: "sent", recipient: "owner@example.com", error_message: null, created_at: "2026-09-28T00:00:00Z" };
@@ -197,5 +208,80 @@ describe("pipelineWarnings — only real, count-derived warnings; never a 'healt
     const n = pipelineWarnings({ total: 1, canSend: 1, credentialsConfigured: 1, verified: 1 }, { ...none, deadLetterJobs: 2, lastJobCompletedAt: "2026-09-28T11:00:00Z" }, now);
     assert.equal(n.length, 1);
     assert.match(n[0].text, /2 job\(s\).*dead-lettered/);
+  });
+});
+
+describe("unsubscribe readiness gates schedule and execute (the server refuses too)", () => {
+  it("an email campaign on a server without unsubscribe config cannot be scheduled or executed, and the reason names the variables", () => {
+    const d = { ...detail({ verified: true, lastTest: sentTest }), unsubscribeReady: false };
+    const a = availableActions(d);
+    assert.deepEqual([a.canSchedule, a.canExecute, a.canTest], [false, false, true]);
+    assert.match(a.reasons.schedule!, /COMM_UNSUBSCRIBE_SECRET/);
+    assert.match(a.reasons.execute!, /COMM_PUBLIC_BASE_URL/);
+  });
+  it("with it configured and a verified test, both are available", () => {
+    const a = availableActions(detail({ verified: true, lastTest: sentTest }));
+    assert.deepEqual([a.canSchedule, a.canExecute], [true, true]);
+  });
+});
+
+describe("progressPercent counts suppressed recipients as finished", () => {
+  it("sent + failed + cancelled + suppressed over total", () => {
+    assert.equal(progressPercent({ sent: 2, suppressed: 2 }, 4), 100);
+    assert.equal(progressPercent({ sent: 1, failed: 1, cancelled: 1, suppressed: 1 }, 8), 50);
+    assert.equal(progressPercent({ suppressed: 3 }, 0), 0);
+  });
+});
+
+describe("parseAddressList", () => {
+  it("splits on newlines, commas, semicolons and spaces; trims; removes exact duplicates", () => {
+    const r = parseAddressList(" a@x.co, b@x.co;\nc@x.co\r\n a@x.co\t\td@x.co ,, ");
+    assert.deepEqual(r.addresses, ["a@x.co", "b@x.co", "c@x.co", "d@x.co"]);
+    assert.equal(r.tooMany, false);
+  });
+  it("empty / whitespace-only input yields nothing", () => {
+    assert.deepEqual(parseAddressList("  \n , ; "), { addresses: [], tooMany: false });
+  });
+  it("caps at the server's batch limit and says so instead of silently truncating", () => {
+    const text = Array.from({ length: MAX_SUPPRESSION_BATCH + 5 }, (_, i) => `u${i}@x.co`).join("\n");
+    const r = parseAddressList(text);
+    assert.equal(r.addresses.length, MAX_SUPPRESSION_BATCH);
+    assert.equal(r.tooMany, true);
+  });
+});
+
+describe("segment criteria form", () => {
+  it("an untouched form is not a valid segment (the server refuses empty criteria)", () => {
+    assert.equal(criteriaFromForm(emptyCriteriaForm()), null);
+    assert.equal(criteriaFromForm({ ...emptyCriteriaForm(), companyContains: "   " }), null);
+  });
+  it("sends only the conditions that were filled in, trimmed", () => {
+    assert.deepEqual(criteriaFromForm({ ...emptyCriteriaForm(), companyContains: " steel ", createdAfter: "2026-01-01" }), { companyContains: "steel", createdAfter: "2026-01-01" });
+    assert.deepEqual(criteriaFromForm({ ...emptyCriteriaForm(), listIds: ["l1"], nameContains: "Asha" }), { listIds: ["l1"], nameContains: "Asha" });
+  });
+  it("describes saved criteria, marking a deleted list rather than hiding it", () => {
+    assert.equal(describeCriteria({ listIds: ["a", "gone"], companyContains: "steel" }, { a: "VIP" }), 'in list: VIP or (deleted list) · company contains "steel"');
+    assert.equal(describeCriteria({}), "(no conditions)");
+    assert.equal(describeCriteria({ createdAfter: "2026-01-01T00:00:00.000Z" }), "added after 2026-01-01");
+  });
+});
+
+describe("email template unsubscribe placeholder", () => {
+  it("is detected exactly", () => {
+    assert.equal(templateHasUnsubscribe('<a href="{{unsubscribe_url}}">x</a>'), true);
+    assert.equal(templateHasUnsubscribe("Hi {{first_name}}"), false);
+    assert.equal(templateHasUnsubscribe("{{ unsubscribe_url }}"), false, "the server matches the exact placeholder");
+  });
+});
+
+describe("analytics wording is honest", () => {
+  it("null rates read n/a, never 0%", () => {
+    assert.equal(percentText(null), "n/a");
+    assert.equal(percentText(0), "0%");
+    assert.equal(percentText(66.7), "66.7%");
+  });
+  it("email/sms say delivery is not tracked; whatsapp says webhook", () => {
+    assert.match(deliveryTrackingNote("provider_acceptance_only"), /not tracked/);
+    assert.match(deliveryTrackingNote("webhook"), /webhook/);
   });
 });

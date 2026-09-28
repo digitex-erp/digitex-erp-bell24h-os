@@ -10,6 +10,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { availableActions, flowSteps, localDateTimeToIso, minScheduleLocal, progressPercent, shouldPoll, type FlowStep } from "@/lib/communicationsFlow";
 import { communicationsApi, errorText, newIdempotencyKey } from "@/lib/communicationsApi";
 import type { CommCampaignDetail, CommRecipient } from "@/types/communications";
+import { CampaignAnalyticsPanel } from "./CampaignAnalyticsPanel";
 import { ErrorNote, formatDate, LoadingRow, StatusBadge } from "./shared";
 
 const POLL_MS = 5000;
@@ -151,13 +152,31 @@ export function CampaignDetailDialog({
               <div className="flex items-center justify-between text-sm">
                 <span className="font-medium">Progress</span>
                 <span className="text-muted-foreground">
-                  {detail.recipientCounts.sent} sent · {detail.recipientCounts.failed} failed · {detail.recipientCounts.queued} in flight · {detail.recipientCounts.pending} waiting
+                  {detail.recipientCounts.sent} sent · {detail.recipientCounts.failed} failed · {detail.recipientCounts.suppressed} suppressed · {detail.recipientCounts.queued} in flight · {detail.recipientCounts.pending} waiting
                 </span>
               </div>
               <Progress value={pct} />
               {c.status === "paused" && (
                 <p className="text-sm text-amber-600 dark:text-amber-400">
-                  Paused{c.paused_reason === "quota" ? ": this organization's daily send quota was reached" : ""}. Nothing was dropped — use Execute to resume.
+                  Paused
+                  {c.paused_reason === "quota"
+                    ? ": this organization's daily send quota was reached"
+                    : c.paused_reason === "unsubscribe_not_configured"
+                      ? ": the server has no unsubscribe configuration (COMM_UNSUBSCRIBE_SECRET / COMM_PUBLIC_BASE_URL), so no email was sent"
+                      : ""}
+                  . Nothing was dropped — fix the cause, then use Execute to resume.
+                </p>
+              )}
+              {!detail.unsubscribeReady && (
+                <p role="alert" className="rounded-md border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-700 dark:text-red-300">
+                  Email campaigns need a signed unsubscribe link. The server has no <code>COMM_UNSUBSCRIBE_SECRET</code> / <code>COMM_PUBLIC_BASE_URL</code>, so this campaign cannot be
+                  scheduled or executed.
+                </p>
+              )}
+              {c.audience && (
+                <p className="text-xs text-muted-foreground">
+                  Audience: {c.audience.type === "contacts" ? "picked contacts" : c.audience.type === "list" ? "a saved list" : "a saved segment"}
+                  {c.audience_summary ? ` · ${c.audience_summary.suppressed} suppressed, ${c.audience_summary.invalidAddress} invalid address` : ""}
                 </p>
               )}
             </section>
@@ -226,6 +245,14 @@ export function CampaignDetailDialog({
               </div>
             </section>
 
+            {/* Analytics — only once something could have been sent */}
+            {c.status !== "draft" && (
+              <section className="space-y-3">
+                <h3 className="font-medium">Analytics</h3>
+                <CampaignAnalyticsPanel campaignId={c.id} refreshKey={detail} />
+              </section>
+            )}
+
             {/* Recipients */}
             <section className="space-y-3">
               <div className="flex flex-wrap items-center justify-between gap-3">
@@ -236,7 +263,7 @@ export function CampaignDetailDialog({
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {["all", "pending", "queued", "sent", "failed", "cancelled"].map((s) => (
+                      {["all", "pending", "queued", "sent", "failed", "cancelled", "suppressed"].map((s) => (
                         <SelectItem key={s} value={s}>
                           {s === "all" ? "All statuses" : s}
                         </SelectItem>

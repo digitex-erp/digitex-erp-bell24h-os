@@ -78,6 +78,21 @@ export async function call(h: Harness, method: string, path: string, o: CallOpts
   return { status: res.status, json, text, headers: res.headers };
 }
 
+/** Email campaigns need a signed unsubscribe link; tests configure it the way a deployment would. */
+export const UNSUBSCRIBE_TEST_SECRET = "test-unsubscribe-secret-0123456789abcdef";
+export const UNSUBSCRIBE_TEST_BASE = "https://os.example.test";
+export function useUnsubscribeEnv(): () => void {
+  const prev = { s: process.env.COMM_UNSUBSCRIBE_SECRET, b: process.env.COMM_PUBLIC_BASE_URL };
+  process.env.COMM_UNSUBSCRIBE_SECRET = UNSUBSCRIBE_TEST_SECRET;
+  process.env.COMM_PUBLIC_BASE_URL = UNSUBSCRIBE_TEST_BASE;
+  return () => {
+    if (prev.s === undefined) delete process.env.COMM_UNSUBSCRIBE_SECRET;
+    else process.env.COMM_UNSUBSCRIBE_SECRET = prev.s;
+    if (prev.b === undefined) delete process.env.COMM_PUBLIC_BASE_URL;
+    else process.env.COMM_PUBLIC_BASE_URL = prev.b;
+  };
+}
+
 export const silenceAudit = () => {
   const real = console.log;
   console.log = (...args: unknown[]) => {

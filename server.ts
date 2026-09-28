@@ -30,6 +30,8 @@ import { WorkerRegistry } from "./server/workers/WorkerRegistry.js";
 import { WorkerSupervisor } from "./server/workers/WorkerSupervisor.js";
 import { seoRoutes } from "./server/routes/seoRoutes.js";
 import { registerCommunicationRoutes } from "./server/communication/routes.js";
+import { requireAnyRole } from "./server/communication/rbac.js";
+import { checkVaultTables, vaultRemedy } from "./server/lib/vaultHealth.js";
 
 // OS-INTEGRATION-IMPLEMENTATION-01: extracted so a Vercel serverless entry point
 // (api/index.ts) can obtain the fully-configured Express app without also calling
@@ -407,7 +409,7 @@ export async function createApp() {
   // named as vault handlers needing tenant isolation) and are intentionally
   // NOT migrated to postgrestFetch() below; they remain on the pooled
   // connection because there is no RLS-respecting equivalent for them.
-  app.get("/api/check-table", requireAuth, async (req, res) => {
+  app.get("/api/check-table", requireAuth, requireAnyRole(getPool, ["ADMIN"], "diagnostics"), async (req, res) => {
     try {
       const dbPool = getPool();
       console.log("[Runtime] DB Connection attempt starting...");
@@ -419,7 +421,7 @@ export async function createApp() {
     }
   });
 
-  app.get("/api/check-users-count", requireAuth, async (req, res) => {
+  app.get("/api/check-users-count", requireAuth, requireAnyRole(getPool, ["ADMIN"], "diagnostics"), async (req, res) => {
     try {
       const dbPool = getPool();
       const result = await dbPool.query("SELECT count(*) FROM auth.users;");
@@ -505,6 +507,19 @@ export async function createApp() {
   // that is TASK-04/GC-3, gated on the Council's TASK-03 decision — it only
   // ensures that whatever RLS policy exists (today: fully permissive) is what
   // actually governs access, not a bypass.
+  // Diagnoses "Could not load documents": reports, per vault table, whether PostgREST can read it AS THE CALLER
+  // and why not (table missing / no permission / server unconfigured). Read-only; any signed-in user.
+  app.get("/api/vault/health", requireAuth, async (req, res) => {
+    const { auth, requestId } = req as AuthedRequest;
+    try {
+      const tables = await checkVaultTables(auth!.token, postgrestFetch);
+      res.json({ ok: tables.every((t) => t.ok), tables, remedy: vaultRemedy(tables), requestId });
+    } catch (err: any) {
+      console.error("[Runtime] Vault health error:", err.message);
+      res.status(500).json({ error: "internal_error", requestId });
+    }
+  });
+
   app.get("/api/vault/documents", requireAuth, async (req, res) => {
     const { auth, requestId } = req as AuthedRequest;
     try {

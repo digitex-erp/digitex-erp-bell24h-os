@@ -16,6 +16,15 @@ in `vercel.json` would pick them up — up to ~24 h late).
 Not verified: that a schedule can reach the deployed app, that `CRON_SECRET` is set on the deployment, or that the
 tick route runs in production (nothing in this repository has ever observed it running there).
 
+## Certifying it (repeatable)
+```bash
+npx tsx scripts/certify-scheduler.ts --app-url https://<production-app-host>
+```
+Reads `schedules list` / `schedules logs` through the CLI and prints **CERTIFIED** only when: an active GET https schedule targets
+`/api/v1/workers/tick` with an Authorization header, at least 3 of the last 10 runs answered HTTP 2xx and none failed, the newest run is
+< 24 h old, and an *unauthenticated* GET of the tick route is refused (401/403). It never creates a schedule, never calls the worker with
+a credential, and never prints header values. On 2026-09-28 it reports **NOT CERTIFIED** (0 schedules exist).
+
 ## How the pieces fit
 ```
 InsForge schedule (every N seconds/minutes)

@@ -16,7 +16,7 @@ import { ProviderFactory } from "../providers/ProviderFactory.js";
 import type { AdapterSendResult, OutboundMessage, ProviderAdapter, ResolvedProviderConfig } from "../types.js";
 import type { QueueJob } from "../../queue/QueueTypes.js";
 import { createTestDb, seedOrg, seedUser, type TestDb } from "./helpers/testDb.js";
-import { call, seedContact, serve, silenceAudit, type Harness } from "./helpers/httpHarness.js";
+import { call, seedContact, serve, silenceAudit, useUnsubscribeEnv, type Harness } from "./helpers/httpHarness.js";
 
 let t: TestDb;
 let h: Harness;
@@ -24,6 +24,7 @@ let handler: CommunicationJobHandler;
 let orgA: string;
 let orgB: string;
 let unmute: () => void;
+let restoreUnsubEnv: () => void;
 const U: Record<string, string> = {};
 const registry = () => (ProviderFactory as unknown as { registry: Record<string, ProviderAdapter> }).registry;
 const originalResend = registry().resend;
@@ -47,6 +48,7 @@ const fakeResend: ProviderAdapter = {
 
 before(async () => {
   unmute = silenceAudit();
+  restoreUnsubEnv = useUnsubscribeEnv();
   t = await createTestDb();
   handler = new CommunicationJobHandler(t.pool);
   orgA = await seedOrg(t.db, "A");
@@ -70,6 +72,7 @@ after(async () => {
   registry().resend = originalResend;
   delete process.env.COMM_RESEND_FLOW;
   unmute();
+  restoreUnsubEnv();
   await h.close();
   await t.db.close();
 });
@@ -86,7 +89,7 @@ const as = (who: string, org = orgA) => ({ user: U[who], org });
 const key = () => `k-${randomUUID()}`;
 const count = async (sql: string, p: unknown[] = []) => (await t.db.query<{ n: number }>(sql, p)).rows[0].n;
 
-async function template(subject = "Hello {{first_name}}", body = "<p>Hi {{first_name}} from {{company}}</p>") {
+async function template(subject = "Hello {{first_name}}", body = "<p>Hi {{first_name}} from {{company}} <a href=\"{{unsubscribe_url}}\">Unsubscribe</a></p>") {
   const r = await call(h, "POST", "/api/communications/templates", { ...as("manager"), body: { name: `t-${randomUUID().slice(0, 6)}`, channelType: "email", subject, body } });
   assert.equal(r.status, 201, r.text);
   return r.json.template.id as string;
@@ -193,7 +196,7 @@ describe("create campaign", () => {
     assert.equal(r.json.campaign.status, "draft");
     assert.equal(r.json.campaign.name, "Launch");
     assert.equal(r.json.campaign.total_recipients, 2);
-    assert.deepEqual(r.json.audience, { requested: 6, resolved: 2, notFound: 2, invalidAddress: 1, duplicate: 1 });
+    assert.deepEqual(r.json.audience, { requested: 6, resolved: 2, notFound: 2, invalidAddress: 1, duplicate: 1, suppressed: 0 });
     assert.equal(await count(`SELECT COUNT(*)::int AS n FROM public.communication_campaign_recipients WHERE campaign_id=$1`, [r.json.campaign.id]), 2);
     assert.ok(r.json.campaign.consent_confirmed_at);
     assert.equal(r.json.campaign.consent_confirmed_by, U.manager);
@@ -489,7 +492,7 @@ describe("schedule and execute", () => {
     const org = await seedOrg(t.db, "quota-camp-org");
     const mgr = await seedUser(t.db, org, ["MANAGER"]);
     U.qm = mgr;
-    const tpl = (await call(h, "POST", "/api/communications/templates", { user: mgr, org, body: { name: "t", channelType: "email", subject: "s", body: "b" } })).json.template.id;
+    const tpl = (await call(h, "POST", "/api/communications/templates", { user: mgr, org, body: { name: "t", channelType: "email", subject: "s", body: "b {{unsubscribe_url}}" } })).json.template.id;
     const ids: string[] = [];
     for (let i = 0; i < 4; i++) ids.push(await seedContact(t.db, org, { first: `Q${i}`, email: `q${i}@example.com` }));
     const c = await call(h, "POST", "/api/communications/campaigns", { user: mgr, org, body: { name: "q", channelType: "email", templateId: tpl, contactIds: ids, consentConfirmed: true } });

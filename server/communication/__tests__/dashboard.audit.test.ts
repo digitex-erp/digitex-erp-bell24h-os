@@ -17,7 +17,7 @@ import { ProviderFactory } from "../providers/ProviderFactory.js";
 import type { AdapterSendResult, OutboundMessage, ProviderAdapter } from "../types.js";
 import type { QueueJob } from "../../queue/QueueTypes.js";
 import { createTestDb, seedOrg, seedUser, type TestDb } from "./helpers/testDb.js";
-import { call, seedContact, serve, type Harness } from "./helpers/httpHarness.js";
+import { call, seedContact, serve, useUnsubscribeEnv, type Harness } from "./helpers/httpHarness.js";
 
 let t: TestDb;
 let h: Harness;
@@ -42,6 +42,7 @@ interface AuditLine {
 }
 let audit: AuditLine[] = [];
 const realLog = console.log;
+let restoreUnsubEnv: () => void;
 let result: AdapterSendResult = { success: true, providerMessageId: "pm" };
 const fake: ProviderAdapter = {
   provider: "resend",
@@ -60,6 +61,7 @@ before(async () => {
     }
     realLog(...args);
   };
+  restoreUnsubEnv = useUnsubscribeEnv();
   t = await createTestDb();
   handler = new CommunicationJobHandler(t.pool);
   orgA = await seedOrg(t.db, "A");
@@ -74,6 +76,7 @@ before(async () => {
 });
 after(async () => {
   console.log = realLog;
+  restoreUnsubEnv();
   registry().resend = originalResend;
   delete process.env.COMM_RESEND_AUD;
   await h.close();
@@ -214,7 +217,7 @@ describe("audit: the worker records what actually happened to each message", () 
 describe("audit: the campaign flow", () => {
   it("test send, execute, batch, per-message sends and completion are all audited; #enqueued == #messages", async () => {
     await addProvider();
-    const tpl = (await call(h, "POST", "/api/communications/templates", { ...as("manager"), body: { name: "t", channelType: "email", subject: "s", body: "b" } })).json.template.id;
+    const tpl = (await call(h, "POST", "/api/communications/templates", { ...as("manager"), body: { name: "t", channelType: "email", subject: "s", body: "b {{unsubscribe_url}}" } })).json.template.id;
     const ids = [await seedContact(t.db, orgA, { first: "A", email: "a1@example.com" }), await seedContact(t.db, orgA, { first: "B", email: "b1@example.com" })];
     const c = await call(h, "POST", "/api/communications/campaigns", { ...as("manager"), body: { name: "c", channelType: "email", templateId: tpl, contactIds: ids, consentConfirmed: true } });
     const id = c.json.campaign.id;
@@ -245,7 +248,7 @@ describe("audit: the campaign flow", () => {
 
   it("cancel and quota pause are audited", async () => {
     await addProvider();
-    const tpl = (await call(h, "POST", "/api/communications/templates", { ...as("manager"), body: { name: "t2", channelType: "email", subject: "s", body: "b" } })).json.template.id;
+    const tpl = (await call(h, "POST", "/api/communications/templates", { ...as("manager"), body: { name: "t2", channelType: "email", subject: "s", body: "b {{unsubscribe_url}}" } })).json.template.id;
     const cids = [await seedContact(t.db, orgA, { first: "Q", email: "q1@example.com" }), await seedContact(t.db, orgA, { first: "R", email: "r1@example.com" })];
     const c = await call(h, "POST", "/api/communications/campaigns", { ...as("manager"), body: { name: "q", channelType: "email", templateId: tpl, contactIds: cids, consentConfirmed: true } });
     const id = c.json.campaign.id;

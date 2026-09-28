@@ -158,6 +158,20 @@ export function validateScheduledAt(value: unknown, now: Date = new Date()): Dat
   return d;
 }
 
+/** An http(s) URL safe to put inside a header: no whitespace, control characters, angle brackets, quotes or non-ASCII. */
+export function validateHeaderUrl(value: unknown, field = "unsubscribeUrl"): string {
+  const v = requireString(value, field);
+  if (v.length === 0 || v.length > 2000) throw new CommunicationValidationError(field, "must be 1-2000 characters");
+  if (!/^https?:\/\/[\x21-\x7E]+$/.test(v) || /[<>"'\\`]/.test(v)) throw new CommunicationValidationError(field, "must be a plain http(s) URL");
+  try {
+    const u = new URL(v);
+    if (u.protocol !== "https:" && u.protocol !== "http:") throw new Error("protocol");
+  } catch {
+    throw new CommunicationValidationError(field, "is not a valid URL");
+  }
+  return v;
+}
+
 export function validateSmtpHost(value: unknown): string {
   const v = requireString(value, "settings.host");
   if (!HOSTNAME_RE.test(v)) throw new CommunicationValidationError("settings.host", "is not a valid hostname");

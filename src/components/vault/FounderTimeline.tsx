@@ -16,7 +16,8 @@ import {
   Loader2,
   AlertTriangle
 } from "lucide-react";
-import { authedFetchJson, AuthedFetchError } from "@/lib/authedFetch";
+import { authedFetchJson } from "@/lib/authedFetch";
+import { vaultLoadError } from "@/lib/diagnosticsErrors";
 
 interface Milestone {
   id: string;
@@ -60,11 +61,7 @@ export function FounderTimeline() {
       })
       .catch(err => {
         console.error("Failed to fetch timeline:", err);
-        setError(
-          err instanceof AuthedFetchError && err.status === 401
-            ? "Your session could not be verified — try signing in again."
-            : "Could not load the roadmap.",
-        );
+        setError(vaultLoadError(err, "the roadmap"));
         setMilestones([]);
         setLoading(false);
       });

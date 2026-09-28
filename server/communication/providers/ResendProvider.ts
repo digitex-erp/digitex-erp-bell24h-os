@@ -25,7 +25,7 @@ import type {
   OutboundMessage,
   ResolvedProviderConfig,
 } from "../types.js";
-import { CommunicationValidationError, validateEmailAddress, validateSubject } from "../validation.js";
+import { CommunicationValidationError, validateEmailAddress, validateHeaderUrl, validateSubject } from "../validation.js";
 
 const RESEND_API_BASE = "https://api.resend.com";
 
@@ -46,10 +46,12 @@ export class ResendProvider implements ProviderAdapter {
     // validation applies at every adapter: one rule for what may be sent, not one per vendor.
     let recipient: string;
     let subject: string | null;
+    let unsubscribeUrl: string | undefined;
     try {
       validateEmailAddress(from, "settings.fromAddress");
       recipient = validateEmailAddress(message.recipient);
       subject = validateSubject(message.subject);
+      unsubscribeUrl = message.unsubscribeUrl === undefined ? undefined : validateHeaderUrl(message.unsubscribeUrl);
     } catch (err: any) {
       if (err instanceof CommunicationValidationError) return { success: false, errorMessage: err.message };
       throw err;
@@ -68,6 +70,7 @@ export class ResendProvider implements ProviderAdapter {
           to: [recipient],
           subject: subject || "(no subject)",
           html: message.body,
+          ...(unsubscribeUrl ? { headers: { "List-Unsubscribe": `<${unsubscribeUrl}>`, "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" } } : {}),
         }),
       });
 

@@ -1,11 +1,15 @@
 import { useState } from "react";
-import { CalendarClock, FileText, LayoutDashboard, MessageSquare, Megaphone, ScrollText, Server, ShieldAlert } from "lucide-react";
+import { BarChart3, Ban, CalendarClock, FileText, LayoutDashboard, MessageSquare, Megaphone, ScrollText, Server, ShieldAlert, Users } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { AnalyticsTab } from "@/components/communications/AnalyticsTab";
+import { AudienceTab } from "@/components/communications/AudienceTab";
+import { CampaignDetailDialog } from "@/components/communications/CampaignDetailDialog";
 import { CampaignsTab } from "@/components/communications/CampaignsTab";
 import { DashboardTab } from "@/components/communications/DashboardTab";
 import { LogsTab } from "@/components/communications/LogsTab";
 import { ProvidersTab } from "@/components/communications/ProvidersTab";
 import { SchedulesTab } from "@/components/communications/SchedulesTab";
+import { SuppressionsTab } from "@/components/communications/SuppressionsTab";
 import { TemplatesTab } from "@/components/communications/TemplatesTab";
 
 /**
@@ -19,6 +23,7 @@ import { TemplatesTab } from "@/components/communications/TemplatesTab";
 export function AdminCommunicationsPage() {
   const [tab, setTab] = useState("dashboard");
   const [logCampaign, setLogCampaign] = useState<string | undefined>();
+  const [analyticsCampaign, setAnalyticsCampaign] = useState<string | null>(null);
 
   const trigger =
     "data-[state=active]:bg-primary/10 data-[state=active]:text-primary border-b-2 border-transparent data-[state=active]:border-primary rounded-none h-12 px-4";
@@ -30,7 +35,7 @@ export function AdminCommunicationsPage() {
           <MessageSquare className="h-7 w-7 text-primary" />
           Communications
         </h1>
-        <p className="text-muted-foreground">Templates, campaigns, delivery logs and provider status for email, WhatsApp and SMS.</p>
+        <p className="text-muted-foreground">Templates, audiences, campaigns, suppressions, analytics, delivery logs and provider status for email, WhatsApp and SMS.</p>
       </div>
 
       <div className="flex items-start gap-3 rounded-md border border-amber-500/30 bg-amber-500/5 p-4 text-sm">
@@ -52,6 +57,10 @@ export function AdminCommunicationsPage() {
               <FileText className="mr-2 h-4 w-4" />
               Templates
             </TabsTrigger>
+            <TabsTrigger value="audience" className={trigger}>
+              <Users className="mr-2 h-4 w-4" />
+              Audience
+            </TabsTrigger>
             <TabsTrigger value="campaigns" className={trigger}>
               <Megaphone className="mr-2 h-4 w-4" />
               Campaigns
@@ -59,6 +68,14 @@ export function AdminCommunicationsPage() {
             <TabsTrigger value="schedules" className={trigger}>
               <CalendarClock className="mr-2 h-4 w-4" />
               Schedules
+            </TabsTrigger>
+            <TabsTrigger value="analytics" className={trigger}>
+              <BarChart3 className="mr-2 h-4 w-4" />
+              Analytics
+            </TabsTrigger>
+            <TabsTrigger value="suppressions" className={trigger}>
+              <Ban className="mr-2 h-4 w-4" />
+              Suppressions
             </TabsTrigger>
             <TabsTrigger value="logs" className={trigger}>
               <ScrollText className="mr-2 h-4 w-4" />
@@ -77,6 +94,9 @@ export function AdminCommunicationsPage() {
         <TabsContent value="templates">
           <TemplatesTab />
         </TabsContent>
+        <TabsContent value="audience">
+          <AudienceTab />
+        </TabsContent>
         <TabsContent value="campaigns">
           <CampaignsTab
             onViewLogs={(id) => {
@@ -93,6 +113,12 @@ export function AdminCommunicationsPage() {
             }}
           />
         </TabsContent>
+        <TabsContent value="analytics">
+          <AnalyticsTab onOpenCampaign={setAnalyticsCampaign} />
+        </TabsContent>
+        <TabsContent value="suppressions">
+          <SuppressionsTab />
+        </TabsContent>
         <TabsContent value="logs">
           <LogsTab focusCampaignId={logCampaign} />
         </TabsContent>
@@ -100,6 +126,17 @@ export function AdminCommunicationsPage() {
           <ProvidersTab />
         </TabsContent>
       </Tabs>
+
+      <CampaignDetailDialog
+        campaignId={analyticsCampaign}
+        onClose={() => setAnalyticsCampaign(null)}
+        onChanged={() => undefined}
+        onViewLogs={(id) => {
+          setAnalyticsCampaign(null);
+          setLogCampaign(id);
+          setTab("logs");
+        }}
+      />
     </div>
   );
 }

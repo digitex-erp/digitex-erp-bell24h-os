@@ -5,7 +5,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Plus, Search, FileText, Calendar, Tag, ArrowRight, Loader2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
-import { authedFetchJson, AuthedFetchError } from "@/lib/authedFetch";
+import { authedFetchJson } from "@/lib/authedFetch";
+import { vaultLoadError } from "@/lib/diagnosticsErrors";
 
 interface VaultDocument {
   id: string;
@@ -30,11 +31,7 @@ export function VaultDocuments() {
       })
       .catch(err => {
         console.error("Failed to fetch docs:", err);
-        setError(
-          err instanceof AuthedFetchError && err.status === 401
-            ? "Your session could not be verified — try signing in again."
-            : "Could not load documents.",
-        );
+        setError(vaultLoadError(err, "documents"));
         setDocs([]);
         setLoading(false);
       });

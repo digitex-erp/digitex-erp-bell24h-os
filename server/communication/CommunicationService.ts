@@ -29,6 +29,7 @@
 import type pg from "pg";
 import { QueueManager } from "../queue/QueueManager.js";
 import { emitAuditEvent, newRequestId } from "../audit.js";
+import { assertNotSuppressed } from "./SuppressionService.js";
 import type {
   ChannelType,
   CommunicationMessage,
@@ -255,6 +256,9 @@ export class CommunicationService {
   async sendMessage(rawInput: SendMessageInput): Promise<SendResult> {
     const requestId = newRequestId();
     const input = this.validateInput(rawInput);
+    // A replay of an already-accepted send (same idempotency key) is answered as before; a NEW send to a
+    // suppressed address is refused before anything is stored or queued.
+    await assertNotSuppressed(this.pool, input.organizationId, input.channelType, input.recipient);
     const resolved = await this.resolveTemplateIfNeeded(input.organizationId, input);
     const { message, deduplicated } = await this.createMessageRecord(input, resolved, "queued", null);
 
@@ -297,6 +301,7 @@ export class CommunicationService {
   async scheduleMessage(rawInput: ScheduleMessageInput): Promise<SendResult> {
     const requestId = newRequestId();
     const input = { ...this.validateInput(rawInput), scheduledAt: rawInput.scheduledAt };
+    await assertNotSuppressed(this.pool, input.organizationId, input.channelType, input.recipient);
     const resolved = await this.resolveTemplateIfNeeded(input.organizationId, input);
     const { message, deduplicated } = await this.createMessageRecord(input, resolved, "scheduled", input.scheduledAt);
 
