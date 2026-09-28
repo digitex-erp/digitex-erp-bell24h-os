@@ -16,6 +16,9 @@
 -- Deliberately reuses the existing job_queue (server/queue/QueueManager.ts) for
 -- scheduling, retry, and dead-lettering instead of a new queue table.
 --
+-- Sprint C0 (hardening): tenant write access to communication_providers / messages /
+-- campaigns / deliveries / webhooks is removed (see the RLS section); idempotency_key added.
+--
 -- No provider credential values live in these tables. communication_providers
 -- stores only `credentials_secret_ref` — the NAME of a server-side secret
 -- (e.g. an env var), never the value — per SECURITY_BASELINE.md ("Never store
@@ -27,7 +30,7 @@ CREATE TABLE IF NOT EXISTS public.communication_providers (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     organization_id UUID REFERENCES public.organizations(id) ON DELETE CASCADE,
     name TEXT NOT NULL, -- human label, e.g. "Primary transactional email"
-    provider TEXT NOT NULL, -- ProviderFactory registry key: 'resend', 'smtp', 'msg91', 'meta_whatsapp', 'twilio'
+    provider TEXT NOT NULL, -- ProviderFactory registry key: 'resend', 'smtp', 'msg91', 'meta_whatsapp'
     channel_type TEXT NOT NULL CHECK (channel_type IN ('email', 'sms', 'whatsapp', 'voice', 'push')),
     credentials_secret_ref TEXT NOT NULL, -- name of a server-side secret (env var / secrets store key), never the value
     priority INT DEFAULT 0, -- lower = tried first; enables failover across providers of the same channel_type
@@ -92,6 +95,7 @@ CREATE TABLE IF NOT EXISTS public.communication_messages (
     ),
     provider_message_id TEXT, -- id returned by the winning provider adapter's send()
     error_message TEXT,
+    idempotency_key TEXT, -- caller-supplied (Idempotency-Key header); one (organization_id, idempotency_key) -> one message
     retry_count INT DEFAULT 0,
     max_retries INT DEFAULT 3,
     scheduled_at TIMESTAMPTZ,
@@ -144,6 +148,14 @@ CREATE TABLE IF NOT EXISTS public.communication_webhooks (
 -- Indexes for the hot paths.
 CREATE INDEX IF NOT EXISTS idx_communication_messages_org_status
     ON public.communication_messages (organization_id, status);
+-- Sprint C0 / B3: idempotency. ADD COLUMN IF NOT EXISTS keeps this file safe to re-run
+-- against a database that already has the earlier version of the table.
+ALTER TABLE public.communication_messages ADD COLUMN IF NOT EXISTS idempotency_key TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_communication_messages_org_idempotency
+    ON public.communication_messages (organization_id, idempotency_key) WHERE idempotency_key IS NOT NULL;
+-- Supports the rolling-24h quota count.
+CREATE INDEX IF NOT EXISTS idx_communication_messages_org_channel_created
+    ON public.communication_messages (organization_id, channel_type, created_at);
 CREATE INDEX IF NOT EXISTS idx_communication_messages_campaign
     ON public.communication_messages (campaign_id) WHERE campaign_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_communication_providers_channel
@@ -153,8 +165,21 @@ CREATE INDEX IF NOT EXISTS idx_communication_deliveries_message
 CREATE INDEX IF NOT EXISTS idx_communication_webhooks_provider_message_id
     ON public.communication_webhooks (provider_message_id) WHERE provider_message_id IS NOT NULL;
 
--- RLS: org isolation on every table, matching the house convention
--- (public.get_current_org_id()).
+-- RLS. Sprint C0 (B1/B3) changed the model from "org isolation on everything" to
+-- "tenants READ their own rows; the SERVER writes".
+--
+-- Why: the API enforces role checks, rate limits, per-organization quotas,
+-- idempotency and input validation. Every one of those is bypassed if a tenant can
+-- INSERT straight into communication_providers / communication_messages through the
+-- Supabase client. In particular a tenant-writable communication_providers row let a
+-- tenant name a shared server secret and an attacker-controlled SMTP host, so the
+-- worker would send the real credential to that host (ProviderFactory's secret-name
+-- allowlist blocks arbitrary env vars, but cannot stop that replay on its own).
+--
+-- The server connects with a role that bypasses RLS (pooled DATABASE_URL), so it is
+-- unaffected. Tenants (anon / authenticated) keep org-scoped SELECT where the data is
+-- theirs to see, and lose all writes except on templates (no outbound effect on their
+-- own; content is re-validated at send time and role-checked in the API).
 ALTER TABLE public.communication_providers ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.communication_templates ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.communication_campaigns ENABLE ROW LEVEL SECURITY;
@@ -162,34 +187,62 @@ ALTER TABLE public.communication_messages ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.communication_deliveries ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.communication_webhooks ENABLE ROW LEVEL SECURITY;
 
--- providers: no client-side SELECT of credentials_secret_ref is prevented by
--- RLS alone (RLS is row-level, not column-level) — the server API layer (not
--- built in this slice) must never project credentials_secret_ref to the
--- browser. RLS here only enforces org isolation, same as every other table.
-CREATE POLICY "Org isolation select" ON public.communication_providers FOR SELECT USING (organization_id = public.get_current_org_id());
-CREATE POLICY "Org isolation insert" ON public.communication_providers FOR INSERT WITH CHECK (organization_id = public.get_current_org_id());
-CREATE POLICY "Org isolation update" ON public.communication_providers FOR UPDATE USING (organization_id = public.get_current_org_id());
-CREATE POLICY "Org isolation delete" ON public.communication_providers FOR DELETE USING (organization_id = public.get_current_org_id());
+-- Drop every policy an earlier revision of this file may have created, so re-running is safe
+-- and the tightened set below is the whole truth.
+DROP POLICY IF EXISTS "Org isolation select" ON public.communication_providers;
+DROP POLICY IF EXISTS "Org isolation insert" ON public.communication_providers;
+DROP POLICY IF EXISTS "Org isolation update" ON public.communication_providers;
+DROP POLICY IF EXISTS "Org isolation delete" ON public.communication_providers;
+DROP POLICY IF EXISTS "Org isolation select" ON public.communication_templates;
+DROP POLICY IF EXISTS "Org isolation insert" ON public.communication_templates;
+DROP POLICY IF EXISTS "Org isolation update" ON public.communication_templates;
+DROP POLICY IF EXISTS "Org isolation delete" ON public.communication_templates;
+DROP POLICY IF EXISTS "Org isolation select" ON public.communication_campaigns;
+DROP POLICY IF EXISTS "Org isolation insert" ON public.communication_campaigns;
+DROP POLICY IF EXISTS "Org isolation update" ON public.communication_campaigns;
+DROP POLICY IF EXISTS "Org isolation delete" ON public.communication_campaigns;
+DROP POLICY IF EXISTS "Org isolation select" ON public.communication_messages;
+DROP POLICY IF EXISTS "Org isolation insert" ON public.communication_messages;
+DROP POLICY IF EXISTS "Org isolation update" ON public.communication_messages;
+DROP POLICY IF EXISTS "Org isolation delete" ON public.communication_messages;
+DROP POLICY IF EXISTS "Org isolation select" ON public.communication_deliveries;
+DROP POLICY IF EXISTS "Org isolation insert" ON public.communication_deliveries;
+DROP POLICY IF EXISTS "Org isolation select" ON public.communication_webhooks;
+DROP POLICY IF EXISTS "Org isolation insert" ON public.communication_webhooks;
 
+-- providers: NO tenant policy at all (RLS default-deny) and no table privileges.
+-- Provider rows are operator-managed: created with service-role SQL, never by a tenant.
+-- (credentials_secret_ref names a server secret; hiding the row also hides that name.)
+
+-- templates: tenants may read and manage their own org's templates.
 CREATE POLICY "Org isolation select" ON public.communication_templates FOR SELECT USING (organization_id = public.get_current_org_id());
 CREATE POLICY "Org isolation insert" ON public.communication_templates FOR INSERT WITH CHECK (organization_id = public.get_current_org_id());
 CREATE POLICY "Org isolation update" ON public.communication_templates FOR UPDATE USING (organization_id = public.get_current_org_id());
 CREATE POLICY "Org isolation delete" ON public.communication_templates FOR DELETE USING (organization_id = public.get_current_org_id());
 
+-- campaigns / messages / deliveries / webhooks: tenants READ their own org's rows only.
+-- All writes go through the server (API + worker), which is what makes quotas, idempotency,
+-- validation and role checks unbypassable. deliveries and webhooks stay append-only.
 CREATE POLICY "Org isolation select" ON public.communication_campaigns FOR SELECT USING (organization_id = public.get_current_org_id());
-CREATE POLICY "Org isolation insert" ON public.communication_campaigns FOR INSERT WITH CHECK (organization_id = public.get_current_org_id());
-CREATE POLICY "Org isolation update" ON public.communication_campaigns FOR UPDATE USING (organization_id = public.get_current_org_id());
-CREATE POLICY "Org isolation delete" ON public.communication_campaigns FOR DELETE USING (organization_id = public.get_current_org_id());
-
 CREATE POLICY "Org isolation select" ON public.communication_messages FOR SELECT USING (organization_id = public.get_current_org_id());
-CREATE POLICY "Org isolation insert" ON public.communication_messages FOR INSERT WITH CHECK (organization_id = public.get_current_org_id());
-CREATE POLICY "Org isolation update" ON public.communication_messages FOR UPDATE USING (organization_id = public.get_current_org_id());
-CREATE POLICY "Org isolation delete" ON public.communication_messages FOR DELETE USING (organization_id = public.get_current_org_id());
-
--- deliveries / webhooks: append-only. Deliberately no UPDATE/DELETE policy —
--- RLS defaults to deny, enforcing immutability at the database level.
 CREATE POLICY "Org isolation select" ON public.communication_deliveries FOR SELECT USING (organization_id = public.get_current_org_id());
-CREATE POLICY "Org isolation insert" ON public.communication_deliveries FOR INSERT WITH CHECK (organization_id = public.get_current_org_id());
-
 CREATE POLICY "Org isolation select" ON public.communication_webhooks FOR SELECT USING (organization_id = public.get_current_org_id());
-CREATE POLICY "Org isolation insert" ON public.communication_webhooks FOR INSERT WITH CHECK (organization_id = public.get_current_org_id());
+
+-- Defense in depth: policies are one layer, table privileges another. Supabase grants broad
+-- default privileges to anon/authenticated on public tables; strip the ones tenants must not have.
+-- Guarded so the file also runs on a plain Postgres that has no such roles.
+DO $$
+DECLARE
+    r TEXT;
+BEGIN
+    FOREACH r IN ARRAY ARRAY['anon', 'authenticated'] LOOP
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = r) THEN
+            EXECUTE format('REVOKE ALL ON public.communication_providers FROM %I', r);
+            EXECUTE format('REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON public.communication_campaigns FROM %I', r);
+            EXECUTE format('REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON public.communication_messages FROM %I', r);
+            EXECUTE format('REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON public.communication_deliveries FROM %I', r);
+            EXECUTE format('REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON public.communication_webhooks FROM %I', r);
+        END IF;
+    END LOOP;
+END
+$$;

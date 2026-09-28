@@ -130,6 +130,8 @@ export interface SendMessageInput {
   body?: string;
   variables?: Record<string, unknown>;
   createdBy?: string;
+  /** Caller-supplied key; the same (organizationId, idempotencyKey) always maps to one message. */
+  idempotencyKey?: string;
 }
 
 export interface ScheduleMessageInput extends SendMessageInput {
@@ -149,6 +151,9 @@ export interface OutboundMessage {
   subject?: string;
   body: string;
   variables?: Record<string, unknown>;
+  /** Stable per-message key. Passed to providers that support idempotent sends so a worker
+   *  re-run after a crash cannot deliver a second copy (Resend: Idempotency-Key header). */
+  idempotencyKey?: string;
 }
 
 /** Non-secret settings resolved from communication_providers.settings, plus

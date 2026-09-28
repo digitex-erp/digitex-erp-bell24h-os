@@ -25,6 +25,7 @@ import type {
   OutboundMessage,
   ResolvedProviderConfig,
 } from "../types.js";
+import { CommunicationValidationError, validateEmailAddress, validateSubject } from "../validation.js";
 
 const RESEND_API_BASE = "https://api.resend.com";
 
@@ -41,17 +42,31 @@ export class ResendProvider implements ProviderAdapter {
       return { success: false, errorMessage: "Missing resolved API key secret." };
     }
 
+    // The body is JSON-encoded so there is no protocol injection here, but the same
+    // validation applies at every adapter: one rule for what may be sent, not one per vendor.
+    let recipient: string;
+    let subject: string | null;
+    try {
+      validateEmailAddress(from, "settings.fromAddress");
+      recipient = validateEmailAddress(message.recipient);
+      subject = validateSubject(message.subject);
+    } catch (err: any) {
+      if (err instanceof CommunicationValidationError) return { success: false, errorMessage: err.message };
+      throw err;
+    }
+
     try {
       const res = await fetch(`${RESEND_API_BASE}/emails`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${config.secretValue}`,
           "content-type": "application/json",
+          ...(message.idempotencyKey ? { "Idempotency-Key": message.idempotencyKey } : {}),
         },
         body: JSON.stringify({
           from,
-          to: [message.recipient],
-          subject: message.subject || "(no subject)",
+          to: [recipient],
+          subject: subject || "(no subject)",
           html: message.body,
         }),
       });
@@ -91,6 +106,11 @@ export class ResendProvider implements ProviderAdapter {
     if (!config.secretValue) return { valid: false, reason: "No API key resolved from secrets." };
     const from = (config.settings.fromAddress as string) || (config.settings.from_address as string);
     if (!from) return { valid: false, reason: "Provider config settings missing 'fromAddress'." };
+    try {
+      validateEmailAddress(from, "settings.fromAddress");
+    } catch (err: any) {
+      return { valid: false, reason: err?.message || "Invalid fromAddress." };
+    }
     return { valid: true };
   }
 

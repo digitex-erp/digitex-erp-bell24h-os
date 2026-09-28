@@ -37,6 +37,15 @@ import type {
   OutboundMessage,
   ResolvedProviderConfig,
 } from "../types.js";
+import {
+  CommunicationValidationError,
+  encodeHeaderValue,
+  normalizeToCrlf,
+  validateEmailAddress,
+  validateSmtpHost,
+  validateSmtpPort,
+  validateSubject,
+} from "../validation.js";
 
 const DEFAULT_PORT = 587;
 const SOCKET_TIMEOUT_MS = 15000;
@@ -50,16 +59,22 @@ interface SmtpSettings {
   rejectUnauthorized: boolean;
 }
 
+/**
+ * Returns null when host/from are absent (caller reports "missing settings").
+ * Throws CommunicationValidationError when they are present but unsafe — these
+ * values are written into SMTP commands, so they are validated, never trusted.
+ */
 function parseSettings(settings: Record<string, unknown>): SmtpSettings | null {
   const host = settings.host as string | undefined;
   const fromAddress = (settings.fromAddress as string) || (settings.from_address as string);
   if (!host || !fromAddress) return null;
+  const rawPort = settings.port;
   return {
-    host,
-    port: (settings.port as number) || DEFAULT_PORT,
+    host: validateSmtpHost(host),
+    port: rawPort === undefined || rawPort === null || rawPort === "" ? DEFAULT_PORT : validateSmtpPort(rawPort),
     secure: Boolean(settings.secure),
     username: settings.username as string | undefined,
-    fromAddress,
+    fromAddress: validateEmailAddress(fromAddress, "settings.fromAddress"),
     rejectUnauthorized: settings.rejectUnauthorized !== false,
   };
 }
@@ -163,7 +178,8 @@ class SmtpSession {
 
   /** Dot-stuffs the body per RFC 5321 §4.5.2 and sends the terminating CRLF.CRLF. */
   async sendData(headers: string, body: string): Promise<{ code: number; text: string }> {
-    const stuffed = body.replace(/^\./gm, "..");
+    // Normalize first (a bare CR or LF is a smuggling vector), then dot-stuff every line.
+    const stuffed = normalizeToCrlf(body).replace(/^\./gm, "..");
     this.socket.write(headers + "\r\n\r\n" + stuffed + "\r\n.\r\n");
     return this.readResponse();
   }
@@ -243,9 +259,22 @@ export class SMTPProvider implements ProviderAdapter {
   readonly channelType = "email" as const;
 
   async send(message: OutboundMessage, config: ResolvedProviderConfig): Promise<AdapterSendResult> {
-    const cfg = parseSettings(config.settings);
-    if (!cfg) return { success: false, errorMessage: "Provider settings missing 'host' or 'fromAddress'." };
+    let parsed: SmtpSettings | null;
+    let recipient: string;
+    let subject: string;
+    try {
+      parsed = parseSettings(config.settings);
+      // Validated BEFORE any socket is opened: recipient and subject are written verbatim
+      // into RCPT TO / To: / Subject:, so a CR or LF in either is command/header injection.
+      recipient = validateEmailAddress(message.recipient);
+      subject = validateSubject(message.subject) ?? "(no subject)";
+    } catch (err: any) {
+      if (err instanceof CommunicationValidationError) return { success: false, errorMessage: err.message };
+      throw err;
+    }
+    if (!parsed) return { success: false, errorMessage: "Provider settings missing 'host' or 'fromAddress'." };
     if (!config.secretValue) return { success: false, errorMessage: "Missing resolved SMTP password secret." };
+    const cfg = parsed;
 
     try {
       return await withSession(cfg, async (session) => {
@@ -255,7 +284,7 @@ export class SMTPProvider implements ProviderAdapter {
         const mailFrom = await session.command(`MAIL FROM:<${cfg.fromAddress}>`);
         if (mailFrom.code !== 250) return fail(`MAIL FROM rejected: ${mailFrom.text}`);
 
-        const rcptTo = await session.command(`RCPT TO:<${message.recipient}>`);
+        const rcptTo = await session.command(`RCPT TO:<${recipient}>`);
         if (rcptTo.code !== 250 && rcptTo.code !== 251) return fail(`RCPT TO rejected: ${rcptTo.text}`);
 
         const dataStart = await session.command("DATA");
@@ -264,10 +293,11 @@ export class SMTPProvider implements ProviderAdapter {
         const messageId = `<${Date.now()}.${Math.random().toString(36).slice(2)}@bell24h-os>`;
         const headers = [
           `From: ${cfg.fromAddress}`,
-          `To: ${message.recipient}`,
-          `Subject: ${message.subject || "(no subject)"}`,
+          `To: ${recipient}`,
+          `Subject: ${encodeHeaderValue(subject)}`,
           `Date: ${new Date().toUTCString()}`,
           `Message-ID: ${messageId}`,
+          `MIME-Version: 1.0`,
           `Content-Type: text/html; charset=utf-8`,
         ].join("\r\n");
 
@@ -297,7 +327,12 @@ export class SMTPProvider implements ProviderAdapter {
   }
 
   async validate(config: ResolvedProviderConfig): Promise<AdapterValidationResult> {
-    const cfg = parseSettings(config.settings);
+    let cfg: SmtpSettings | null;
+    try {
+      cfg = parseSettings(config.settings);
+    } catch (err: any) {
+      return { valid: false, reason: err?.message || "Invalid provider settings." };
+    }
     if (!cfg) return { valid: false, reason: "Provider settings missing 'host' or 'fromAddress'." };
     if (cfg.username && !config.secretValue) {
       return { valid: false, reason: "Username configured but no password secret resolved." };
@@ -308,13 +343,19 @@ export class SMTPProvider implements ProviderAdapter {
   /** Connects, EHLOs, STARTTLS-upgrades if offered, and authenticates if a username is set — sends no mail. */
   async healthCheck(config: ResolvedProviderConfig): Promise<AdapterHealthResult> {
     const checkedAt = new Date().toISOString();
-    const cfg = parseSettings(config.settings);
+    let cfg: SmtpSettings | null;
+    try {
+      cfg = parseSettings(config.settings);
+    } catch (err: any) {
+      return { healthy: false, detail: err?.message || "Invalid provider settings.", checkedAt };
+    }
     if (!cfg) return { healthy: false, detail: "Provider settings missing 'host' or 'fromAddress'.", checkedAt };
+    const smtp = cfg;
 
     try {
-      await withSession(cfg, async (session) => {
-        await ehloAndMaybeStartTls(session, cfg);
-        if (cfg.username) await authenticate(session, cfg.username, config.secretValue);
+      await withSession(smtp, async (session) => {
+        await ehloAndMaybeStartTls(session, smtp);
+        if (smtp.username) await authenticate(session, smtp.username, config.secretValue);
         session.quit();
       });
       return { healthy: true, checkedAt };

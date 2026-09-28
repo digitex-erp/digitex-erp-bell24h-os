@@ -17,7 +17,7 @@
 import pg from "pg";
 import { QueueJob } from "../../queue/QueueTypes.js";
 import { emitAuditEvent, newRequestId } from "../../audit.js";
-import { ProviderFactory, MissingSecretError, UnknownProviderError } from "../../communication/providers/ProviderFactory.js";
+import { ProviderFactory, MissingSecretError, SecretNotAllowedError, UnknownProviderError } from "../../communication/providers/ProviderFactory.js";
 import type { CommunicationMessage } from "../../communication/types.js";
 
 export interface CommunicationJobPayload {
@@ -56,6 +56,13 @@ export class CommunicationJobHandler {
     }
     const message = messageRes.rows[0] as CommunicationMessage;
 
+    if (message.status === "sent" || message.status === "delivered") {
+      // Worker-side idempotency (Sprint C0 / B3): if an earlier attempt already reached the
+      // provider and recorded success, a re-run of this job (crash after the provider call,
+      // lock-expiry reclaim, duplicate enqueue) must not send a second copy.
+      return { skipped: true, reason: "already_sent" };
+    }
+
     if (message.status === "cancelled") {
       // Message was cancelled after being enqueued but before this attempt ran.
       // Not a failure — nothing to send.
@@ -86,7 +93,13 @@ export class CommunicationJobHandler {
         const adapter = ProviderFactory.getAdapter(row.provider);
         const resolved = ProviderFactory.buildResolvedConfig(row.provider, row.credentials_secret_ref, row.settings || {});
         const result = await adapter.send(
-          { recipient: message.recipient, subject: message.subject ?? undefined, body: message.body || "" },
+          {
+            recipient: message.recipient,
+            subject: message.subject ?? undefined,
+            body: message.body || "",
+            // Stable across worker retries of the same send; a manual retry gets a new value.
+            idempotencyKey: `comm-msg:${message.id}:${message.retry_count}`,
+          },
           resolved,
         );
 
@@ -117,7 +130,7 @@ export class CommunicationJobHandler {
         attempts.push({ provider: row.provider, error: result.errorMessage || "send() returned success:false" });
       } catch (err: any) {
         const reason =
-          err instanceof MissingSecretError || err instanceof UnknownProviderError
+          err instanceof MissingSecretError || err instanceof SecretNotAllowedError || err instanceof UnknownProviderError
             ? err.message
             : err?.message || String(err);
         attempts.push({ provider: row.provider, error: reason });
