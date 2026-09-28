@@ -19,6 +19,7 @@ import fs from "fs";
 import * as aiRouter from "./server/ai/ProviderRouter.js";
 import { requireAuth, type AuthedRequest } from "./server/middleware/requireAuth.js";
 import { requireServiceAuth, type ServiceAuthedRequest } from "./server/middleware/requireServiceAuth.js";
+import { requireCronAuth } from "./server/middleware/requireCronAuth.js";
 import { rateLimit } from "./server/middleware/rateLimit.js";
 import { emitAuditEvent, newRequestId } from "./server/audit.js";
 import { resolveRequestId } from "./server/lib/requestContext.js";
@@ -28,6 +29,7 @@ import { QueueManager } from "./server/queue/QueueManager.js";
 import { WorkerRegistry } from "./server/workers/WorkerRegistry.js";
 import { WorkerSupervisor } from "./server/workers/WorkerSupervisor.js";
 import { seoRoutes } from "./server/routes/seoRoutes.js";
+import { registerCommunicationRoutes } from "./server/communication/routes.js";
 
 // OS-INTEGRATION-IMPLEMENTATION-01: extracted so a Vercel serverless entry point
 // (api/index.ts) can obtain the fully-configured Express app without also calling
@@ -351,6 +353,11 @@ export async function createApp() {
     }
   });
 
+  // Communication Hub API surface. Routes live in server/communication/routes.ts:
+  // requireAuth -> role check (server/communication/rbac.ts) -> rate limit -> handler,
+  // with input validation, idempotency keys and per-org quotas (Sprint C0 hardening).
+  registerCommunicationRoutes(app, { getPool, authenticate: requireAuth });
+
   const getWorkerRegistry = () => WorkerRegistry.getInstance(getPool(), getQueueManager());
   const getWorkerSupervisor = () => WorkerSupervisor.getInstance(getPool(), getQueueManager());
 
@@ -367,6 +374,25 @@ export async function createApp() {
       });
     } catch (err: any) {
       console.error("[Runtime] Worker status error:", err.message);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Serverless worker activation (P0 remediation Phase 3). api/index.ts never
+  // calls startServer(), so WorkerRegistry.start()'s persistent poll loop never
+  // runs in production — this route is the reachable substitute: a bounded,
+  // single-batch tick, triggered by vercel.json's cron entry (or an equivalent
+  // external scheduler hitting this same route), gated by requireCronAuth so
+  // only a caller holding CRON_SECRET can trigger job processing. See
+  // docs/project/BELL24H_OS_P0_REMEDIATION_IMPLEMENTATION_PLAN.md Phase 3 and
+  // docs/project/BELL24H_OS_RUNTIME_REALITY_CERTIFICATION.md §2.
+  app.get("/api/v1/workers/tick", requireCronAuth, async (req, res) => {
+    try {
+      const registry = getWorkerRegistry();
+      const summary = await registry.processBatch();
+      res.json({ success: true, ...summary });
+    } catch (err: any) {
+      console.error("[Runtime] Worker tick error:", err.message);
       res.status(500).json({ error: err.message });
     }
   });
