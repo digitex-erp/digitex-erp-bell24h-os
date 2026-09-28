@@ -6,7 +6,7 @@
 
 | Gate | Result |
 |---|---|
-| `npm test` (new) | **110 / 110 pass**, 31 suites, ~7 s, 0 skipped |
+| `npm test` (new) | **112 / 112 pass**, 32 suites, ~7 s, 0 skipped |
 | `npx tsc --noEmit` | **PASS**, exit 0 |
 | `npm run build` | **PASS**, exit 0 (`dist/server.cjs` 163 kB; the pre-existing >500 kB client-chunk warning only). Test-only dependency `pglite` is **not** in the server bundle. |
 | B1, B2, B3 | **Fixed in code and migration, verified by tests**, with the residual risks listed in §6. |
@@ -70,7 +70,8 @@ Runner: **`node:test` via `tsx`** (`npm test`) — zero new runner dependency; t
 | `migration.test.ts` | 10 | real SQL applies + re-applies; tenant INSERT into providers/messages **denied by the DB**; org-scoped RLS reads; unique idempotency index |
 | `routes.integration.test.ts` | 41 | **integration**: real routes over HTTP + real SQL: 401s, RBAC matrix (incl. cross-org role), validation, idempotency (replay, reuse 422, concurrent, crash recovery), quotas (per org/channel/window, cancel frees slot, replay at limit), rate limits, org isolation, retry cap, no error leakage |
 | `handler.test.ts` | 11 | worker: already-sent skip, exactly-once on re-run, allowlist at runtime, failover, dead-letter, org boundary |
-| **Total** | **110** | |
+| `service.race.test.ts` | 2 | the cross-channel same-key race (unique-index backstop → 422, not 500); other DB errors not disguised |
+| **Total** | **112** | |
 
 **Tests can fail (mutation checks, run and restored):**
 - Original `SMTPProvider.ts` restored → 4 of 7 wire tests **fail** (recipient injection, subject injection, encoding, bare CR).
@@ -87,6 +88,13 @@ Modified: `CommunicationService.ts`, `types.ts`, `ProviderFactory.ts`, `ResendPr
 ## 6. Residual risks and things NOT done (read before merging)
 
 1. **Migration still unapplied/unverified against a real database.** The tenant lockdown only takes effect once `add_communication_hub.sql` runs. It is re-runnable (verified on PGlite twice). Run it in staging first; it assumes Supabase-style `anon`/`authenticated` roles (guarded, so it also runs without them).
+1b. **VERIFY WHAT ROLE `DATABASE_URL` CONNECTS AS — before applying the migration (silent, total failure mode if wrong).** The B1/B3 lockdown `REVOKE`s privileges from `anon` and `authenticated`. That is safe only if the *server's own* connection is neither of those. The test suite cannot prove this: PGlite's default role stands in for the production role, and only `authenticated` is exercised (as a tenant, via `SET ROLE`). If `DATABASE_URL` ever authenticates as `anon`/`authenticated` (misconfiguration, or a future least-privilege change), the server itself loses write access to the hub tables and the whole hub fails — silently and completely, not as a partial regression. In a standard Supabase setup the pooled role is `postgres` (which bypasses RLS), so this is almost certainly fine — but nobody has checked. Run once against the real connection, in staging, before or right after applying the migration, and paste the result:
+
+   ```sql
+   SELECT current_user, rolbypassrls, rolsuper FROM pg_roles WHERE rolname = current_user;
+   -- expect: a role that is NOT anon/authenticated and has rolbypassrls = true (or is the table owner)
+   ```
+
 2. **Roles must exist in production.** RBAC fails closed: an org with no `user_roles` rows gets 403 on everything. I did not query production `roles`; the names are taken from the seed SQL and compared case-insensitively.
 3. **Provider rows have no API** — operators insert them by SQL. There is still no provider-management route.
 4. **Concurrency is logically tested, not race-tested.** PGlite is a single connection (my pool adapter serializes it). The advisory lock that makes quota "count then insert" safe was not exercised under real parallel contention.
