@@ -11,6 +11,7 @@ import { QueueJob, JobType } from "../queue/QueueTypes.js";
 import { AIJobHandler } from "./handlers/AIJobHandler.js";
 import { MediaJobHandler } from "./handlers/MediaJobHandler.js";
 import { PublishingJobHandler } from "./handlers/PublishingJobHandler.js";
+import { CommunicationJobHandler } from "./handlers/CommunicationJobHandler.js";
 import { emitAuditEvent } from "../audit.js";
 
 export interface WorkerOptions {
@@ -45,6 +46,7 @@ export class WorkerRegistry {
   private aiHandler: AIJobHandler;
   private mediaHandler: MediaJobHandler;
   private publishingHandler: PublishingJobHandler;
+  private communicationHandler: CommunicationJobHandler;
 
   constructor(pool: pg.Pool, queueManager: QueueManager, options: WorkerOptions = {}) {
     this.pool = pool;
@@ -67,11 +69,13 @@ export class WorkerRegistry {
       "social",
       "analytics",
       "automation",
+      "communication",
     ];
 
     this.aiHandler = new AIJobHandler(pool);
     this.mediaHandler = new MediaJobHandler(pool, queueManager);
     this.publishingHandler = new PublishingJobHandler(pool);
+    this.communicationHandler = new CommunicationJobHandler(pool);
   }
 
   public static getInstance(pool?: pg.Pool, queueManager?: QueueManager, options?: WorkerOptions): WorkerRegistry {
@@ -289,6 +293,10 @@ export class WorkerRegistry {
         case "publishing":
         case "social":
           result = await this.publishingHandler.handle(job);
+          break;
+
+        case "communication":
+          result = await this.communicationHandler.handle(job);
           break;
 
         default:

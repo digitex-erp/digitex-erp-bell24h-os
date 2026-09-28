@@ -29,6 +29,11 @@ import { QueueManager } from "./server/queue/QueueManager.js";
 import { WorkerRegistry } from "./server/workers/WorkerRegistry.js";
 import { WorkerSupervisor } from "./server/workers/WorkerSupervisor.js";
 import { seoRoutes } from "./server/routes/seoRoutes.js";
+import {
+  CommunicationService,
+  MessageNotFoundError,
+  InvalidStateTransitionError,
+} from "./server/communication/CommunicationService.js";
 
 // OS-INTEGRATION-IMPLEMENTATION-01: extracted so a Vercel serverless entry point
 // (api/index.ts) can obtain the fully-configured Express app without also calling
@@ -349,6 +354,155 @@ export async function createApp() {
     } catch (err: any) {
       console.error("[Runtime] Enqueue error:", err.message);
       res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Communication Hub API surface (foundation slice — see
+  // COMMUNICATION_HUB_IMPLEMENTATION_REPORT.md). organizationId is always
+  // resolved from the authenticated caller's own token (auth.organizationId,
+  // set by requireAuth from the caller's verified Supabase session) — never
+  // accepted from the request body. This is the contract that report's
+  // "Organization Context integration" section required of this exact route.
+  const getCommunicationService = () => new CommunicationService(getPool());
+
+  app.post("/api/communications/send", requireAuth, async (req, res) => {
+    const { auth, requestId } = req as AuthedRequest;
+    const { channelType, recipient, templateId, subject, body, variables, campaignId } = req.body || {};
+
+    if (!channelType || !recipient) {
+      res.status(400).json({ error: "channelType and recipient are required", requestId });
+      return;
+    }
+    if (!templateId && !body) {
+      res.status(400).json({ error: "either templateId or body is required", requestId });
+      return;
+    }
+
+    try {
+      const message = await getCommunicationService().sendMessage({
+        organizationId: auth!.organizationId,
+        channelType,
+        recipient,
+        templateId,
+        subject,
+        body,
+        variables,
+        campaignId,
+        createdBy: auth!.userId,
+      });
+      res.status(201).json({ success: true, message });
+    } catch (err: any) {
+      console.error("[Runtime] Communication send error:", err.message);
+      res.status(500).json({ error: err.message, requestId });
+    }
+  });
+
+  app.get("/api/communications/templates", requireAuth, async (req, res) => {
+    const { auth, requestId } = req as AuthedRequest;
+    const { channelType } = req.query;
+    try {
+      const dbPool = getPool();
+      const result = channelType
+        ? await dbPool.query(
+            `SELECT * FROM public.communication_templates WHERE organization_id = $1 AND channel_type = $2 ORDER BY created_at DESC`,
+            [auth!.organizationId, channelType],
+          )
+        : await dbPool.query(
+            `SELECT * FROM public.communication_templates WHERE organization_id = $1 ORDER BY created_at DESC`,
+            [auth!.organizationId],
+          );
+      res.json({ templates: result.rows });
+    } catch (err: any) {
+      console.error("[Runtime] Templates list error:", err.message);
+      res.status(500).json({ error: err.message, requestId });
+    }
+  });
+
+  app.post("/api/communications/templates", requireAuth, async (req, res) => {
+    const { auth, requestId } = req as AuthedRequest;
+    const { name, channelType, subject, body, variables } = req.body || {};
+
+    if (!name || !channelType || !body) {
+      res.status(400).json({ error: "name, channelType, and body are required", requestId });
+      return;
+    }
+
+    try {
+      const dbPool = getPool();
+      const result = await dbPool.query(
+        `INSERT INTO public.communication_templates (organization_id, name, channel_type, subject, body, variables, created_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+        [auth!.organizationId, name, channelType, subject ?? null, body, JSON.stringify(variables ?? []), auth!.userId],
+      );
+      res.status(201).json({ success: true, template: result.rows[0] });
+    } catch (err: any) {
+      console.error("[Runtime] Template create error:", err.message);
+      res.status(500).json({ error: err.message, requestId });
+    }
+  });
+
+  app.get("/api/communications/history", requireAuth, async (req, res) => {
+    const { auth, requestId } = req as AuthedRequest;
+    const { status, channelType, limit, offset } = req.query;
+    const lim = Math.min(parseInt((limit as string) || "50", 10) || 50, 200);
+    const off = parseInt((offset as string) || "0", 10) || 0;
+
+    try {
+      const dbPool = getPool();
+      const conditions = ["organization_id = $1"];
+      const params: any[] = [auth!.organizationId];
+      if (status) {
+        params.push(status);
+        conditions.push(`status = $${params.length}`);
+      }
+      if (channelType) {
+        params.push(channelType);
+        conditions.push(`channel_type = $${params.length}`);
+      }
+      params.push(lim, off);
+      const result = await dbPool.query(
+        `SELECT * FROM public.communication_messages WHERE ${conditions.join(" AND ")}
+         ORDER BY created_at DESC LIMIT $${params.length - 1} OFFSET $${params.length}`,
+        params,
+      );
+      res.json({ messages: result.rows, limit: lim, offset: off });
+    } catch (err: any) {
+      console.error("[Runtime] Communication history error:", err.message);
+      res.status(500).json({ error: err.message, requestId });
+    }
+  });
+
+  app.get("/api/communications/status/:id", requireAuth, async (req, res) => {
+    const { auth, requestId } = req as AuthedRequest;
+    try {
+      const message = await getCommunicationService().getMessageStatus(auth!.organizationId, req.params.id);
+      if (!message) {
+        res.status(404).json({ error: "Message not found", requestId });
+        return;
+      }
+      res.json({ message });
+    } catch (err: any) {
+      console.error("[Runtime] Communication status error:", err.message);
+      res.status(500).json({ error: err.message, requestId });
+    }
+  });
+
+  app.post("/api/communications/retry/:id", requireAuth, async (req, res) => {
+    const { auth, requestId } = req as AuthedRequest;
+    try {
+      const message = await getCommunicationService().retryFailedMessage(auth!.organizationId, req.params.id, auth!.userId);
+      res.json({ success: true, message });
+    } catch (err: any) {
+      if (err instanceof MessageNotFoundError) {
+        res.status(404).json({ error: err.message, requestId });
+        return;
+      }
+      if (err instanceof InvalidStateTransitionError) {
+        res.status(409).json({ error: err.message, requestId });
+        return;
+      }
+      console.error("[Runtime] Communication retry error:", err.message);
+      res.status(500).json({ error: err.message, requestId });
     }
   });
 

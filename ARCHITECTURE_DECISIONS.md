@@ -58,3 +58,15 @@ The runtime consists of a React/Vite frontend, an Express/Node server boundary, 
 - Hardcoded users, metrics, health results, or production readiness states.
 - UI-only mutations presented as completed workflows.
 - Unreviewed destructive migrations.
+
+## Proposed module (unratified): Communication Hub
+
+Not yet part of the "Approved architecture" list above — recorded here as a gap,
+not silently added as approved. `add_communication_hub.sql` and
+`server/communication/*` implement a schema + service + one-adapter (email)
+slice under the existing "Queue job types and worker handlers" and "Supabase
+migrations/schema scripts with review evidence" extension points, reusing
+`job_queue`/`QueueManager` for scheduling, retry, and dead-lettering rather
+than introducing new queue infrastructure. No API routes, admin UI, or second
+provider adapter exist yet. Get review-gate sign-off before treating this as
+an approved module boundary or adding WhatsApp/SMS/voice/push adapters.
