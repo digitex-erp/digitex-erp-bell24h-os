@@ -41,7 +41,7 @@ import { registerCommunicationRoutes } from "./server/communication/routes.js";
 export async function createApp() {
   const app = express();
 
-  app.use(express.json());
+  app.use(express.json({ verify: (req, _res, buf) => { (req as { rawBody?: Buffer }).rawBody = buf; } })); // rawBody: HMAC verification of the WhatsApp webhook
 
   /**
    * Development-only route guard.

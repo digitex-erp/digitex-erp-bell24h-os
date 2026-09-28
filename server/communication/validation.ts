@@ -110,6 +110,54 @@ export function validateIdempotencyKey(value: unknown): string {
   return v;
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function validateUuid(value: unknown, field: string): string {
+  const v = requireString(value, field);
+  if (!UUID_RE.test(v)) throw new CommunicationValidationError(field, "must be a UUID");
+  return v;
+}
+
+/** A non-empty, de-duplicated list of UUIDs, bounded so one request cannot describe an unbounded audience. */
+export function validateUuidList(value: unknown, field: string, max: number): string[] {
+  if (!Array.isArray(value) || value.length === 0) throw new CommunicationValidationError(field, "must be a non-empty array");
+  if (value.length > max) throw new CommunicationValidationError(field, `must contain at most ${max} items`);
+  return [...new Set(value.map((v) => validateUuid(v, field)))];
+}
+
+export function validateCampaignName(value: unknown): string {
+  const v = requireString(value, "name").trim();
+  assertNoControlChars(v, "name");
+  if (v.length === 0 || v.length > 200) throw new CommunicationValidationError("name", "is required (max 200 characters)");
+  return v;
+}
+
+/** Template variables: a flat object of primitives with word-character keys (they are substituted into message text). */
+export function validateVariables(value: unknown, field = "variables"): Record<string, string | number | boolean> {
+  if (value === undefined || value === null) return {};
+  if (typeof value !== "object" || Array.isArray(value)) throw new CommunicationValidationError(field, "must be an object");
+  const out: Record<string, string | number | boolean> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    if (!/^[A-Za-z0-9_]{1,64}$/.test(k)) throw new CommunicationValidationError(field, `key "${k.slice(0, 20)}" must match [A-Za-z0-9_]`);
+    if (typeof v !== "string" && typeof v !== "number" && typeof v !== "boolean") {
+      throw new CommunicationValidationError(field, `value for "${k}" must be a string, number or boolean`);
+    }
+    if (typeof v === "string" && v.length > 1000) throw new CommunicationValidationError(field, `value for "${k}" is too long`);
+    out[k] = v;
+  }
+  return out;
+}
+
+/** A campaign start time: a valid instant at least a minute away and no more than 90 days out. */
+export function validateScheduledAt(value: unknown, now: Date = new Date()): Date {
+  const raw = requireString(value, "scheduledAt");
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) throw new CommunicationValidationError("scheduledAt", "must be an ISO-8601 date-time");
+  if (d.getTime() < now.getTime() + 60_000) throw new CommunicationValidationError("scheduledAt", "must be at least one minute in the future");
+  if (d.getTime() > now.getTime() + 90 * 24 * 3600 * 1000) throw new CommunicationValidationError("scheduledAt", "must be within 90 days");
+  return d;
+}
+
 export function validateSmtpHost(value: unknown): string {
   const v = requireString(value, "settings.host");
   if (!HOSTNAME_RE.test(v)) throw new CommunicationValidationError("settings.host", "is not a valid hostname");

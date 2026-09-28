@@ -177,8 +177,8 @@ export class CommunicationService {
       const inserted = await client.query(
         `INSERT INTO public.communication_messages (
            organization_id, channel_type, template_id, campaign_id, recipient,
-           subject, body, variables_used, status, scheduled_at, created_by, idempotency_key
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+           subject, body, variables_used, status, scheduled_at, created_by, idempotency_key, is_test
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
          RETURNING *`,
         [
           organizationId,
@@ -193,6 +193,7 @@ export class CommunicationService {
           scheduledAt,
           input.createdBy ?? null,
           idempotencyKey,
+          input.isTest === true,
         ],
       );
       await client.query("COMMIT");

@@ -1,5 +1,7 @@
 # Communication Hub Implementation Report — Foundation
 
+> **Provider scope update (owner decision, 2026-09-28):** approved providers are Resend + SMTP (email), Meta WhatsApp Cloud API direct (WhatsApp), and MSG91 (SMS / OTP only). **Twilio and WhatsApp-via-MSG91 are removed from scope** and any reference below to them is superseded. This report describes the foundation slice as first built; Sprint C0 (hardening) and CH-02 (campaigns / admin console) supersede parts of it.
+
 **Branch:** `feature/communication-hub` (off `main`, uncommitted)
 **Date:** 2026-09-28
 **Verified:** `npm run lint` (tsc --noEmit) and `npm run build` both pass clean. The SMTP client (the highest-risk new code — hand-written protocol, not a library) was additionally driven against a local mock SMTP server and confirmed to complete a full EHLO → STARTTLS-capable → AUTH LOGIN → MAIL FROM → RCPT TO → DATA (with correct RFC 5321 dot-stuffing) → QUIT exchange, returning a real provider message ID. That test also caught and fixed a real bug (see "Bugs found and fixed" below) before it shipped.
@@ -33,7 +35,6 @@ Final table set: `communication_providers`, `communication_templates`, `communic
 | **SMTP** | `providers/SMTPProvider.ts` | Real, working. Hand-rolled over Node's `net`/`tls` (no new dependency — no `nodemailer` in `package.json`, and this matches the codebase's existing "raw fetch, no vendor SDK" convention). Implements EHLO, opportunistic STARTTLS upgrade, AUTH LOGIN, MAIL FROM/RCPT TO/DATA with dot-stuffing. `status()` honestly reports that SMTP has no native delivery-status query rather than fabricating one. |
 | **MSG91** (stub) | `providers/StubProviders.ts` | Non-functional. `validate()` returns a clean "stub, not implemented" result; `send()/status()/healthCheck()` throw loudly if anything ever tries to actually use one. |
 | **Meta WhatsApp** (stub) | same file | Same stub behavior. |
-| **Twilio** (stub) | same file | Same stub behavior. |
 
 **No MSG91 or WhatsApp sending was implemented**, per the request's explicit instruction. The stubs exist only so `ProviderFactory` has a registry entry for those names — this is not a signal that integration work has started.
 
@@ -83,7 +84,7 @@ Communication Hub is still **not** a ratified module boundary — see "Proposed 
 | `server/communication/providers/ProviderFactory.ts` | New (was `adapters/AdapterRegistry.ts`) — now a class, registers 5 providers |
 | `server/communication/providers/ResendProvider.ts` | New (renamed from `adapters/EmailAdapter.ts`), logic unchanged |
 | `server/communication/providers/SMTPProvider.ts` | New — real SMTP client, bug-fixed after live testing |
-| `server/communication/providers/StubProviders.ts` | New — MSG91/Meta WhatsApp/Twilio non-functional stubs |
+| `server/communication/providers/StubProviders.ts` | New — MSG91/Meta WhatsApp non-functional stubs |
 | `server/workers/handlers/CommunicationJobHandler.ts` | Updated for `communication_providers`/`communication_deliveries` |
 | `server/workers/WorkerRegistry.ts` | Unchanged from the earlier pass (already wires the `communication` job type) |
 | `server/communication/adapters/` | **Deleted** — superseded by `providers/` |

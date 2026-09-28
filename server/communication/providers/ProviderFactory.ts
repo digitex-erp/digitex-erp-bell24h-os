@@ -21,7 +21,8 @@
 import type { ProviderAdapter, ResolvedProviderConfig } from "../types.js";
 import { ResendProvider } from "./ResendProvider.js";
 import { SMTPProvider } from "./SMTPProvider.js";
-import { MSG91Provider, MetaWhatsAppProvider } from "./StubProviders.js";
+import { MetaWhatsAppCloudProvider } from "./MetaWhatsAppCloudProvider.js";
+import { MSG91Provider } from "./StubProviders.js";
 
 export class UnknownProviderError extends Error {
   constructor(provider: string) {
@@ -67,7 +68,7 @@ export class ProviderFactory {
     resend: new ResendProvider(),
     smtp: new SMTPProvider(),
     msg91: new MSG91Provider(),
-    meta_whatsapp: new MetaWhatsAppProvider(),
+    meta_whatsapp: new MetaWhatsAppCloudProvider(),
   };
 
   static getAdapter(provider: string): ProviderAdapter {

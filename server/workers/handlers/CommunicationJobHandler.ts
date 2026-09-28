@@ -19,9 +19,17 @@ import { QueueJob } from "../../queue/QueueTypes.js";
 import { emitAuditEvent, newRequestId } from "../../audit.js";
 import { ProviderFactory, MissingSecretError, SecretNotAllowedError, UnknownProviderError } from "../../communication/providers/ProviderFactory.js";
 import type { CommunicationMessage } from "../../communication/types.js";
+import { CampaignService } from "../../communication/CampaignService.js";
 
+/**
+ * Two job shapes share the "communication" job type:
+ *   { messageId }           send one message (the original shape)
+ *   { campaignId, run }     expand ONE batch of a campaign into messages (Sprint CH-02)
+ */
 export interface CommunicationJobPayload {
-  messageId: string;
+  messageId?: string;
+  campaignId?: string;
+  run?: number;
 }
 
 interface ProviderRow {
@@ -43,8 +51,13 @@ export class CommunicationJobHandler {
     const { payload, organization_id, retry_count, max_retries } = job;
     const requestId = newRequestId();
 
+    if (payload?.campaignId) {
+      if (!Number.isInteger(payload.run)) throw new Error("Invalid campaign job payload: missing integer 'run'.");
+      return new CampaignService(this.pool).runBatch(organization_id, payload.campaignId, payload.run as number);
+    }
+
     if (!payload?.messageId) {
-      throw new Error("Invalid communication job payload: missing 'messageId'.");
+      throw new Error("Invalid communication job payload: missing 'messageId' or 'campaignId'.");
     }
 
     const messageRes = await this.pool.query(
@@ -124,6 +137,7 @@ export class CommunicationJobHandler {
             metadata: { provider: row.provider, providerMessageId: result.providerMessageId },
           });
 
+          await this.reconcileCampaign(message);
           return { provider: row.provider, providerMessageId: result.providerMessageId };
         }
 
@@ -203,5 +217,19 @@ export class CommunicationJobHandler {
       requestId,
       metadata: { errorMessage, retryCount: job.retry_count, maxRetries: job.max_retries },
     });
+    await this.reconcileCampaign(message);
+  }
+
+  /**
+   * After a campaign message changes state, refresh the campaign's counters / completion. Best effort:
+   * a reconcile problem must never fail (and thus re-run) a send that already reached the provider.
+   */
+  private async reconcileCampaign(message: CommunicationMessage): Promise<void> {
+    if (!message.campaign_id || (message as CommunicationMessage & { is_test?: boolean }).is_test) return;
+    try {
+      await new CampaignService(this.pool).reconcile(message.organization_id, message.campaign_id);
+    } catch (err) {
+      console.error("[CommunicationJobHandler] campaign reconcile failed:", (err as Error)?.message);
+    }
   }
 }

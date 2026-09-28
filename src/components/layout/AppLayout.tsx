@@ -112,7 +112,7 @@ const sidebarNavItems = [
   },
   {
     title: "Communications",
-    href: "/communications",
+    href: "/admin/communications",
     icon: MessageSquare,
   },
   // PHASE 4A blocker remediation (TASK-07 / GOV-3): "Admin" and "Settings" nav

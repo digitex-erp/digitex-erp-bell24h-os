@@ -10,7 +10,9 @@
  * convention — there was none to match; role names are the ones seeded in
  * activate_vyaparsethu_root_org.sql):
  *
- *   send   ADMIN, MANAGER                  outbound messages cost money and reach real people
+ *   manage ADMIN                           provider health checks (real calls with server credentials)
+ *   send   ADMIN, MANAGER                  outbound messages cost money and reach real people;
+ *                                          also test-send / schedule / execute / cancel a campaign
  *   write  ADMIN, MANAGER, EDITOR          create/modify templates (no outbound effect by itself)
  *   read   ADMIN, MANAGER, EDITOR, VIEWER  templates, history, message status
  *
@@ -23,9 +25,10 @@ import type pg from "pg";
 import { emitAuditEvent } from "../audit.js";
 import type { AuthedRequest } from "../middleware/requireAuth.js";
 
-export type CommunicationPermission = "send" | "write" | "read";
+export type CommunicationPermission = "manage" | "send" | "write" | "read";
 
 export const ROLE_PERMISSIONS: Readonly<Record<CommunicationPermission, readonly string[]>> = {
+  manage: ["ADMIN"],
   send: ["ADMIN", "MANAGER"],
   write: ["ADMIN", "MANAGER", "EDITOR"],
   read: ["ADMIN", "MANAGER", "EDITOR", "VIEWER"],

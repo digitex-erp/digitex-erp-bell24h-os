@@ -83,6 +83,7 @@ export interface CommunicationMessage {
   error_message: string | null;
   retry_count: number;
   max_retries: number;
+  is_test?: boolean;
   scheduled_at: string | null;
   sent_at: string | null;
   created_by: string | null;
@@ -132,6 +133,8 @@ export interface SendMessageInput {
   createdBy?: string;
   /** Caller-supplied key; the same (organizationId, idempotencyKey) always maps to one message. */
   idempotencyKey?: string;
+  /** Test sends are real sends to one operator-chosen address; they never count toward campaign totals. */
+  isTest?: boolean;
 }
 
 export interface ScheduleMessageInput extends SendMessageInput {
@@ -193,6 +196,8 @@ export interface ProviderAdapter {
   /** Registry key, must match communication_providers.provider. */
   readonly provider: string;
   readonly channelType: ChannelType;
+  /** True for a placeholder that cannot send. Real adapters leave this undefined. */
+  readonly isStub?: boolean;
 
   send(message: OutboundMessage, config: ResolvedProviderConfig): Promise<AdapterSendResult>;
   status(providerMessageId: string, config: ResolvedProviderConfig): Promise<AdapterStatusResult>;
