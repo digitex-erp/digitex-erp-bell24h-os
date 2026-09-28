@@ -19,9 +19,19 @@ import { QueueJob } from "../../queue/QueueTypes.js";
 import { emitAuditEvent, newRequestId } from "../../audit.js";
 import { ProviderFactory, MissingSecretError, SecretNotAllowedError, UnknownProviderError } from "../../communication/providers/ProviderFactory.js";
 import type { CommunicationMessage } from "../../communication/types.js";
+import { CampaignService } from "../../communication/CampaignService.js";
+import { findSuppression } from "../../communication/SuppressionService.js";
+import { buildUnsubscribeUrl, getUnsubscribeConfig } from "../../communication/unsubscribe.js";
 
+/**
+ * Two job shapes share the "communication" job type:
+ *   { messageId }           send one message (the original shape)
+ *   { campaignId, run }     expand ONE batch of a campaign into messages (Sprint CH-02)
+ */
 export interface CommunicationJobPayload {
-  messageId: string;
+  messageId?: string;
+  campaignId?: string;
+  run?: number;
 }
 
 interface ProviderRow {
@@ -43,8 +53,13 @@ export class CommunicationJobHandler {
     const { payload, organization_id, retry_count, max_retries } = job;
     const requestId = newRequestId();
 
+    if (payload?.campaignId) {
+      if (!Number.isInteger(payload.run)) throw new Error("Invalid campaign job payload: missing integer 'run'.");
+      return new CampaignService(this.pool).runBatch(organization_id, payload.campaignId, payload.run as number);
+    }
+
     if (!payload?.messageId) {
-      throw new Error("Invalid communication job payload: missing 'messageId'.");
+      throw new Error("Invalid communication job payload: missing 'messageId' or 'campaignId'.");
     }
 
     const messageRes = await this.pool.query(
@@ -67,6 +82,41 @@ export class CommunicationJobHandler {
       // Message was cancelled after being enqueued but before this attempt ran.
       // Not a failure — nothing to send.
       return { skipped: true, reason: "cancelled" };
+    }
+
+    // Suppression is checked AGAIN here, immediately before any provider is contacted: an address that
+    // unsubscribed (or was blocked) AFTER this message was queued must not receive it.
+    const suppressedReason = await findSuppression(this.pool, organization_id, message.channel_type, message.recipient);
+    if (suppressedReason) {
+      await this.pool.query(
+        `UPDATE public.communication_messages SET status = 'cancelled', error_message = $1, updated_at = NOW() WHERE id = $2 AND organization_id = $3`,
+        [`suppressed: ${suppressedReason}`, message.id, organization_id],
+      );
+      emitAuditEvent({
+        actor: "service:worker",
+        organizationId: organization_id,
+        action: "job.communication.suppressed",
+        targetType: "communication_message",
+        targetId: message.id,
+        outcome: "denied",
+        requestId,
+        metadata: { reason: suppressedReason },
+      });
+      await this.reconcileCampaign(message);
+      return { skipped: true, reason: "suppressed" };
+    }
+
+    // Campaign email carries a signed one-click unsubscribe link. Without the configuration to build it the
+    // message is NOT sent (fail closed) — sending marketing email with no way to opt out is not an option.
+    let unsubscribeUrl: string | undefined;
+    if (message.campaign_id && message.channel_type === "email") {
+      const cfg = getUnsubscribeConfig();
+      if (!cfg) {
+        const errorMessage = "UNSUBSCRIBE_NOT_CONFIGURED: set COMM_UNSUBSCRIBE_SECRET and COMM_PUBLIC_BASE_URL before sending campaign email.";
+        await this.markFailed(job, message, errorMessage, requestId);
+        throw new Error(errorMessage);
+      }
+      unsubscribeUrl = buildUnsubscribeUrl(cfg, { organizationId: organization_id, channel: "email", address: message.recipient.toLowerCase() });
     }
 
     const providersRes = await this.pool.query(
@@ -97,8 +147,10 @@ export class CommunicationJobHandler {
             recipient: message.recipient,
             subject: message.subject ?? undefined,
             body: message.body || "",
+            template: message.provider_template ?? undefined,
             // Stable across worker retries of the same send; a manual retry gets a new value.
             idempotencyKey: `comm-msg:${message.id}:${message.retry_count}`,
+            unsubscribeUrl,
           },
           resolved,
         );
@@ -124,6 +176,7 @@ export class CommunicationJobHandler {
             metadata: { provider: row.provider, providerMessageId: result.providerMessageId },
           });
 
+          await this.reconcileCampaign(message);
           return { provider: row.provider, providerMessageId: result.providerMessageId };
         }
 
@@ -203,5 +256,19 @@ export class CommunicationJobHandler {
       requestId,
       metadata: { errorMessage, retryCount: job.retry_count, maxRetries: job.max_retries },
     });
+    await this.reconcileCampaign(message);
+  }
+
+  /**
+   * After a campaign message changes state, refresh the campaign's counters / completion. Best effort:
+   * a reconcile problem must never fail (and thus re-run) a send that already reached the provider.
+   */
+  private async reconcileCampaign(message: CommunicationMessage): Promise<void> {
+    if (!message.campaign_id || (message as CommunicationMessage & { is_test?: boolean }).is_test) return;
+    try {
+      await new CampaignService(this.pool).reconcile(message.organization_id, message.campaign_id);
+    } catch (err) {
+      console.error("[CommunicationJobHandler] campaign reconcile failed:", (err as Error)?.message);
+    }
   }
 }

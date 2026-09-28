@@ -29,6 +29,8 @@
 import type pg from "pg";
 import { QueueManager } from "../queue/QueueManager.js";
 import { emitAuditEvent, newRequestId } from "../audit.js";
+import { assertNotSuppressed } from "./SuppressionService.js";
+import { buildTemplateParameters, type ProviderTemplateRef } from "./whatsappTemplate.js";
 import type {
   ChannelType,
   CommunicationMessage,
@@ -99,14 +101,18 @@ export class CommunicationService {
   private async resolveTemplateIfNeeded(
     organizationId: string,
     input: SendMessageInput,
-  ): Promise<{ subject: string | null; body: string }> {
+  ): Promise<{ subject: string | null; body: string; providerTemplate: ProviderTemplateRef | null }> {
     if (!input.templateId) {
       if (!input.body) throw new CommunicationValidationError("body", "either templateId or body is required");
-      return { subject: validateSubject(input.subject), body: validateBody(input.body) };
+      return { subject: validateSubject(input.subject), body: validateBody(input.body), providerTemplate: null };
     }
+    // The mapping columns are only read for WhatsApp, so email / SMS sends do not depend on them.
     const res = await this.pool.query(
-      `SELECT subject, body FROM public.communication_templates
-       WHERE id = $1 AND organization_id = $2 AND is_active = true`,
+      input.channelType === "whatsapp"
+        ? `SELECT subject, body, provider_template_name, provider_template_language, provider_template_variables
+             FROM public.communication_templates WHERE id = $1 AND organization_id = $2 AND is_active = true`
+        : `SELECT subject, body FROM public.communication_templates
+             WHERE id = $1 AND organization_id = $2 AND is_active = true`,
       [input.templateId, organizationId],
     );
     if (res.rows.length === 0) {
@@ -122,9 +128,20 @@ export class CommunicationService {
       });
     };
     // Re-validated AFTER substitution: a variable value can carry CR/LF into the subject.
+    const row = res.rows[0];
+    // A WhatsApp template mapped to a Meta template is sent AS that template: every mapped variable must have a
+    // real value for this recipient, otherwise the send is refused (fail closed, reported as a validation error).
+    const providerTemplate: ProviderTemplateRef | null = row.provider_template_name
+      ? {
+          name: row.provider_template_name,
+          language: row.provider_template_language ?? "en",
+          parameters: buildTemplateParameters(Array.isArray(row.provider_template_variables) ? row.provider_template_variables : [], input.variables),
+        }
+      : null;
     return {
-      subject: validateSubject(substitute(res.rows[0].subject)),
-      body: validateBody(substitute(res.rows[0].body)),
+      subject: validateSubject(substitute(row.subject)),
+      body: validateBody(substitute(row.body)),
+      providerTemplate,
     };
   }
 
@@ -135,7 +152,7 @@ export class CommunicationService {
    */
   private async createMessageRecord(
     input: SendMessageInput,
-    resolved: { subject: string | null; body: string },
+    resolved: { subject: string | null; body: string; providerTemplate?: ProviderTemplateRef | null },
     status: "queued" | "scheduled",
     scheduledAt: Date | null,
   ): Promise<{ message: CommunicationMessage; deduplicated: boolean }> {
@@ -177,8 +194,8 @@ export class CommunicationService {
       const inserted = await client.query(
         `INSERT INTO public.communication_messages (
            organization_id, channel_type, template_id, campaign_id, recipient,
-           subject, body, variables_used, status, scheduled_at, created_by, idempotency_key
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+           subject, body, variables_used, status, scheduled_at, created_by, idempotency_key, is_test
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
          RETURNING *`,
         [
           organizationId,
@@ -193,8 +210,16 @@ export class CommunicationService {
           scheduledAt,
           input.createdBy ?? null,
           idempotencyKey,
+          input.isTest === true,
         ],
       );
+      if (resolved.providerTemplate) {
+        const withTemplate = await client.query(
+          `UPDATE public.communication_messages SET provider_template = $1::jsonb WHERE id = $2 RETURNING *`,
+          [JSON.stringify(resolved.providerTemplate), inserted.rows[0].id],
+        );
+        inserted.rows[0] = withTemplate.rows[0];
+      }
       await client.query("COMMIT");
       return { message: inserted.rows[0] as CommunicationMessage, deduplicated: false };
     } catch (err) {
@@ -254,6 +279,9 @@ export class CommunicationService {
   async sendMessage(rawInput: SendMessageInput): Promise<SendResult> {
     const requestId = newRequestId();
     const input = this.validateInput(rawInput);
+    // A replay of an already-accepted send (same idempotency key) is answered as before; a NEW send to a
+    // suppressed address is refused before anything is stored or queued.
+    await assertNotSuppressed(this.pool, input.organizationId, input.channelType, input.recipient);
     const resolved = await this.resolveTemplateIfNeeded(input.organizationId, input);
     const { message, deduplicated } = await this.createMessageRecord(input, resolved, "queued", null);
 
@@ -296,6 +324,7 @@ export class CommunicationService {
   async scheduleMessage(rawInput: ScheduleMessageInput): Promise<SendResult> {
     const requestId = newRequestId();
     const input = { ...this.validateInput(rawInput), scheduledAt: rawInput.scheduledAt };
+    await assertNotSuppressed(this.pool, input.organizationId, input.channelType, input.recipient);
     const resolved = await this.resolveTemplateIfNeeded(input.organizationId, input);
     const { message, deduplicated } = await this.createMessageRecord(input, resolved, "scheduled", input.scheduledAt);
 

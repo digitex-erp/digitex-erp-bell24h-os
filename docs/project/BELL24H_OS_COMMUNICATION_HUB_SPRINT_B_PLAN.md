@@ -1,5 +1,7 @@
 # Bell24h-OS Communication Hub — Sprint B Implementation Plan
 
+> **Provider scope update (owner decision, 2026-09-28):** approved providers are Resend + SMTP (email), Meta WhatsApp Cloud API direct (WhatsApp), and MSG91 (SMS / OTP only). **Twilio and WhatsApp-via-MSG91 are removed from scope** and any reference below to them is superseded.
+
 **Status:** PLAN ONLY — nothing in this document has been built as part of writing it. Where a component already exists (built in the preceding "Foundation" pass on `feature/communication-hub`), this plan says so explicitly and does not re-propose it as future work.
 **Governance status:** Communication Hub is still an **unratified** module boundary — see `ARCHITECTURE_DECISIONS.md`'s "Proposed module (unratified): Communication Hub" note. This plan does not change that. Section 9 below states exactly which parts of Sprint B require review-gate sign-off before implementation and why.
 **Branch:** all Foundation work referenced here lives on `feature/communication-hub` (uncommitted).
@@ -11,7 +13,7 @@
 | 1 | Notification Service | **Not built** — see §3.1, this is new scope, distinct from what exists | — |
 | 2 | Email Adapter | **Built** (2 real providers: Resend, SMTP) | `server/communication/providers/ResendProvider.ts`, `SMTPProvider.ts` |
 | 3 | WhatsApp Adapter | **Stub only** — `send()` throws by design | `server/communication/providers/StubProviders.ts` |
-| 4 | SMS Adapter | **Stub only** (MSG91, Twilio) — same | same file |
+| 4 | SMS Adapter | **Stub only** (MSG91) — same | same file |
 | 5 | Template Engine | **Minimal version built** — `{{var}}` substitution only, no conditionals/loops | `CommunicationService.resolveTemplateIfNeeded()` |
 | 6 | Event Queue | **Built** — deliberately reused `job_queue`/`QueueManager`, no new queue | `server/queue/QueueManager.ts` (existing, unmodified) |
 | 7 | Delivery Tracking | **Built** — per-attempt append-only log | `communication_deliveries` table |
@@ -100,7 +102,7 @@ This is the concrete mechanism behind "Expose SDK/API for VyaparSethu" — no ne
 
 ### 3.3 Provider adapters (WhatsApp, SMS)
 
-**Already interface-conformant** (`ProviderAdapter`, via `StubProviders.ts`) — implementing them for real means writing `send()`/`status()`/`validate()`/`healthCheck()` bodies against Meta's WhatsApp Cloud API and MSG91/Twilio's REST APIs, registering them in `ProviderFactory`, and nothing else changes (`CommunicationService`, `CommunicationJobHandler`, the API routes are all already provider-agnostic). This is genuinely low-risk to wire in *mechanically* — the risk is entirely in governance and credential-handling, covered in §9.
+**Already interface-conformant** (`ProviderAdapter`, via `StubProviders.ts`) — implementing them for real means writing `send()`/`status()`/`validate()`/`healthCheck()` bodies against Meta's WhatsApp Cloud API and MSG91's REST API, registering them in `ProviderFactory`, and nothing else changes (`CommunicationService`, `CommunicationJobHandler`, the API routes are all already provider-agnostic). This is genuinely low-risk to wire in *mechanically* — the risk is entirely in governance and credential-handling, covered in §9.
 
 ## 4. Folder structure
 
@@ -113,10 +115,9 @@ server/communication/
     ├── ProviderFactory.ts            # existing
     ├── ResendProvider.ts             # existing, real
     ├── SMTPProvider.ts                # existing, real
-    ├── StubProviders.ts               # existing — MSG91/WhatsApp/Twilio stubs
+    ├── StubProviders.ts               # existing — MSG91 stub (Meta WhatsApp has been a real, unverified adapter since CH-02)
     ├── WhatsAppCloudProvider.ts       # NEW — replaces the WhatsApp stub (§9 gate)
     ├── MSG91Provider.ts                # NEW — replaces the MSG91 stub (§9 gate)
-    └── TwilioProvider.ts               # NEW — replaces the Twilio stub (§9 gate)
 
 server/workers/handlers/
 └── CommunicationJobHandler.ts        # existing — no change needed for new providers
@@ -150,14 +151,14 @@ Already implemented and unchanged by Sprint B: org-isolation (`organization_id =
 | **B.2** | `/api/v1/communications/notify` service-to-service route (§3.2) | None — reuses an existing, already-ratified auth mechanism |
 | **B.3** | Webhook receiver route + wiring `communication_webhooks` inserts for Resend's real webhook events (delivered/bounced/complained) | None — Resend is already a real, working provider |
 | **B.4** | Real WhatsApp Cloud API provider | **Review-gate sign-off required first** — see §9 |
-| **B.5** | Real MSG91 and/or Twilio SMS provider | **Review-gate sign-off required first** — see §9 |
+| **B.5** | Real MSG91 SMS/OTP provider | **Review-gate sign-off required first** — see §9 |
 | **B.6** | Admin Dashboard Integration (item 10) | Depends on B.1–B.3 being real; needs its own design pass (no UI has been scoped anywhere in this module yet) |
 
 ## 9. Governance gate — read before starting B.4 or B.5
 
 `ARCHITECTURE_DECISIONS.md` requires an Architecture Decision Record and review-gate approval for architecture changes; Communication Hub has neither yet. Two additional, more specific reasons B.4/B.5 need a checkpoint before code, not just architecture-in-general:
 
-1. **WhatsApp Cloud API and MSG91/Twilio both require real, live third-party credentials.** Per `SECRET_ROTATION_CHECKLIST.md` (this session), no such credential currently exists in this project's environment. Someone has to obtain one before B.4/B.5 can produce *working* code rather than another well-typed stub.
+1. **WhatsApp Cloud API and MSG91 both require real, live third-party credentials.** Per `SECRET_ROTATION_CHECKLIST.md` (this session), no such credential currently exists in this project's environment. Someone has to obtain one before B.4/B.5 can produce *working* code rather than another well-typed stub.
 2. **MSG91 specifically:** this repo's own `bell24h-verify` skill documents MSG91 phone-OTP auth as the signature of a *different, unrelated* Bell24h codebase. Before writing `MSG91Provider.ts` for real, confirm this project is actually meant to integrate MSG91 itself, rather than that association being a holdover from conflating the two projects' documentation (which has happened before in this session's own audits).
 
 B.1–B.3 have no such blocker and can proceed once approved to start.

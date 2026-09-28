@@ -1,10 +1,11 @@
 /**
- * Non-functional provider stubs — MSG91 (SMS), Meta WhatsApp Cloud API (direct).
+ * Non-functional provider stub — MSG91 (SMS / OTP). Meta WhatsApp is now a real (unverified) adapter:
+ * see MetaWhatsAppCloudProvider.ts.
  *
  * Per explicit instruction: "Do not implement MSG91 or WhatsApp sending yet.
  * Only foundation and provider abstraction." These exist so ProviderFactory
- * can resolve a `communication_providers.provider` value of 'msg91' or
- * 'meta_whatsapp' to *something* conforming to ProviderAdapter,
+ * can resolve a `communication_providers.provider` value of 'msg91'
+ * to *something* conforming to ProviderAdapter,
  * without pretending any of them can actually send.
  *
  * validate() returns a clean, non-throwing "invalid, this is a stub" result —
@@ -18,9 +19,10 @@
  * Provider strategy (owner decision, 2026-09-28): Email = Resend primary + SMTP
  * fallback; SMS = MSG91; WhatsApp = Meta Cloud API direct. Twilio and
  * WhatsApp-via-MSG91 are removed; Exotel and Gupshup are deferred and have no
- * code here. The real Meta (Sprint C1) and MSG91 (Sprint C2) adapters replace
- * these stubs only after the Gate D.1 criteria are met — these stubs are NOT a
- * signal that integration work has started.
+ * code here. Meta WhatsApp is now a real adapter (CH-02, UNVERIFIED — no credential
+ * or approved template exists yet). The real MSG91 adapter (Sprint C2) replaces this
+ * stub only after the Gate D.1 criteria are met — the stub is NOT a signal that
+ * MSG91 integration work has started.
  */
 
 import type {
@@ -43,6 +45,7 @@ class NotImplementedProviderError extends Error {
 abstract class NotImplementedProvider implements ProviderAdapter {
   abstract readonly provider: string;
   abstract readonly channelType: ChannelType;
+  readonly isStub = true;
 
   async send(_message: OutboundMessage, _config: ResolvedProviderConfig): Promise<AdapterSendResult> {
     throw new NotImplementedProviderError(this.provider, "send");
@@ -64,9 +67,4 @@ abstract class NotImplementedProvider implements ProviderAdapter {
 export class MSG91Provider extends NotImplementedProvider {
   readonly provider = "msg91";
   readonly channelType = "sms" as const;
-}
-
-export class MetaWhatsAppProvider extends NotImplementedProvider {
-  readonly provider = "meta_whatsapp";
-  readonly channelType = "whatsapp" as const;
 }

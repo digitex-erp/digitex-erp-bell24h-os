@@ -42,6 +42,7 @@ import {
   encodeHeaderValue,
   normalizeToCrlf,
   validateEmailAddress,
+  validateHeaderUrl,
   validateSmtpHost,
   validateSmtpPort,
   validateSubject,
@@ -262,12 +263,14 @@ export class SMTPProvider implements ProviderAdapter {
     let parsed: SmtpSettings | null;
     let recipient: string;
     let subject: string;
+    let unsubscribeUrl: string | undefined;
     try {
       parsed = parseSettings(config.settings);
       // Validated BEFORE any socket is opened: recipient and subject are written verbatim
       // into RCPT TO / To: / Subject:, so a CR or LF in either is command/header injection.
       recipient = validateEmailAddress(message.recipient);
       subject = validateSubject(message.subject) ?? "(no subject)";
+      unsubscribeUrl = message.unsubscribeUrl === undefined ? undefined : validateHeaderUrl(message.unsubscribeUrl);
     } catch (err: any) {
       if (err instanceof CommunicationValidationError) return { success: false, errorMessage: err.message };
       throw err;
@@ -299,6 +302,7 @@ export class SMTPProvider implements ProviderAdapter {
           `Message-ID: ${messageId}`,
           `MIME-Version: 1.0`,
           `Content-Type: text/html; charset=utf-8`,
+          ...(unsubscribeUrl ? [`List-Unsubscribe: <${unsubscribeUrl}>`, `List-Unsubscribe-Post: List-Unsubscribe=One-Click`] : []),
         ].join("\r\n");
 
         const dataEnd = await session.sendData(headers, message.body);

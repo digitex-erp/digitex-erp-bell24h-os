@@ -23,3 +23,7 @@ coverage/
 .roo
 .trae
 .windsurf
+
+# CH-02 UI harness build output / screenshots
+scripts/ch02-ui-harness/dist/
+scripts/ch02-ui-harness/shots/

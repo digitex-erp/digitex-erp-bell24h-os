@@ -5,7 +5,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Lock, Unlock, CheckCircle, Circle, AlertCircle, Loader2 } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
-import { authedFetchJson, AuthedFetchError } from "@/lib/authedFetch";
+import { authedFetchJson } from "@/lib/authedFetch";
+import { vaultLoadError } from "@/lib/diagnosticsErrors";
 
 interface Phase {
   id: number;
@@ -29,11 +30,7 @@ export function PhaseUnlockEngine() {
       })
       .catch(err => {
         console.error("Failed to fetch phases:", err);
-        setError(
-          err instanceof AuthedFetchError && err.status === 401
-            ? "Your session could not be verified — try signing in again."
-            : "Could not load phases.",
-        );
+        setError(vaultLoadError(err, "phases"));
         setPhases([]);
         setLoading(false);
       });

@@ -21,7 +21,11 @@ import { requireAuth, type AuthedRequest } from "./server/middleware/requireAuth
 import { requireServiceAuth, type ServiceAuthedRequest } from "./server/middleware/requireServiceAuth.js";
 import { requireCronAuth } from "./server/middleware/requireCronAuth.js";
 import { rateLimit } from "./server/middleware/rateLimit.js";
-import { emitAuditEvent, newRequestId } from "./server/audit.js";
+import { emitAuditEvent, newRequestId, setAuditSink } from "./server/audit.js";
+import { createAuditSink } from "./server/lib/auditStore.js";
+import { registerAuditRoutes } from "./server/lib/auditRoutes.js";
+import { registerIndustryRoutes } from "./server/industry/routes.js";
+import { registerExplainabilityRoutes } from "./server/explainability/routes.js";
 import { resolveRequestId } from "./server/lib/requestContext.js";
 import { sendError } from "./server/lib/errors.js";
 import { postgrestFetch, SupabaseRestError } from "./server/lib/supabaseRest.js";
@@ -30,6 +34,8 @@ import { WorkerRegistry } from "./server/workers/WorkerRegistry.js";
 import { WorkerSupervisor } from "./server/workers/WorkerSupervisor.js";
 import { seoRoutes } from "./server/routes/seoRoutes.js";
 import { registerCommunicationRoutes } from "./server/communication/routes.js";
+import { requireAnyRole } from "./server/communication/rbac.js";
+import { checkVaultTables, vaultRemedy } from "./server/lib/vaultHealth.js";
 
 // OS-INTEGRATION-IMPLEMENTATION-01: extracted so a Vercel serverless entry point
 // (api/index.ts) can obtain the fully-configured Express app without also calling
@@ -41,7 +47,7 @@ import { registerCommunicationRoutes } from "./server/communication/routes.js";
 export async function createApp() {
   const app = express();
 
-  app.use(express.json());
+  app.use(express.json({ verify: (req, _res, buf) => { (req as { rawBody?: Buffer }).rawBody = buf; } })); // rawBody: HMAC verification of the WhatsApp webhook
 
   /**
    * Development-only route guard.
@@ -358,6 +364,17 @@ export async function createApp() {
   // with input validation, idempotency keys and per-org quotas (Sprint C0 hardening).
   registerCommunicationRoutes(app, { getPool, authenticate: requireAuth });
 
+  // Durable audit log (Phase 2). The sink is registered only when a database is configured; events always also go to
+  // stdout. If add_audit_log.sql has not been applied, GET /api/audit/status reports table_missing rather than healthy.
+  if (process.env.DATABASE_URL) setAuditSink(createAuditSink(getPool));
+  registerAuditRoutes(app, { getPool, authenticate: requireAuth });
+
+  // Industry Intelligence (Phase 2): organization-scoped register of industries and recorded market signals.
+  registerIndustryRoutes(app, { getPool, authenticate: requireAuth });
+
+  // Explainability framework (contracts only): read-only status and stored records. No explainer is registered.
+  registerExplainabilityRoutes(app, { getPool, authenticate: requireAuth });
+
   const getWorkerRegistry = () => WorkerRegistry.getInstance(getPool(), getQueueManager());
   const getWorkerSupervisor = () => WorkerSupervisor.getInstance(getPool(), getQueueManager());
 
@@ -407,7 +424,7 @@ export async function createApp() {
   // named as vault handlers needing tenant isolation) and are intentionally
   // NOT migrated to postgrestFetch() below; they remain on the pooled
   // connection because there is no RLS-respecting equivalent for them.
-  app.get("/api/check-table", requireAuth, async (req, res) => {
+  app.get("/api/check-table", requireAuth, requireAnyRole(getPool, ["ADMIN"], "diagnostics"), async (req, res) => {
     try {
       const dbPool = getPool();
       console.log("[Runtime] DB Connection attempt starting...");
@@ -419,7 +436,7 @@ export async function createApp() {
     }
   });
 
-  app.get("/api/check-users-count", requireAuth, async (req, res) => {
+  app.get("/api/check-users-count", requireAuth, requireAnyRole(getPool, ["ADMIN"], "diagnostics"), async (req, res) => {
     try {
       const dbPool = getPool();
       const result = await dbPool.query("SELECT count(*) FROM auth.users;");
@@ -505,6 +522,19 @@ export async function createApp() {
   // that is TASK-04/GC-3, gated on the Council's TASK-03 decision — it only
   // ensures that whatever RLS policy exists (today: fully permissive) is what
   // actually governs access, not a bypass.
+  // Diagnoses "Could not load documents": reports, per vault table, whether PostgREST can read it AS THE CALLER
+  // and why not (table missing / no permission / server unconfigured). Read-only; any signed-in user.
+  app.get("/api/vault/health", requireAuth, async (req, res) => {
+    const { auth, requestId } = req as AuthedRequest;
+    try {
+      const tables = await checkVaultTables(auth!.token, postgrestFetch);
+      res.json({ ok: tables.every((t) => t.ok), tables, remedy: vaultRemedy(tables), requestId });
+    } catch (err: any) {
+      console.error("[Runtime] Vault health error:", err.message);
+      res.status(500).json({ error: "internal_error", requestId });
+    }
+  });
+
   app.get("/api/vault/documents", requireAuth, async (req, res) => {
     const { auth, requestId } = req as AuthedRequest;
     try {

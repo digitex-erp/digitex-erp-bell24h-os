@@ -6,7 +6,7 @@
 
 import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { communicationMigrationSql, createTestDb, seedOrg, seedUser, type TestDb } from "./helpers/testDb.js";
+import { campaignsMigrationSql, communicationMigrationSql, createTestDb, seedOrg, seedUser, type TestDb } from "./helpers/testDb.js";
 
 let t: TestDb;
 let orgA: string;
@@ -37,15 +37,18 @@ async function asTenant<T>(userId: string, fn: () => Promise<T>): Promise<T> {
 }
 
 describe("migration applies and is re-runnable", () => {
-  it("creates the six tables", async () => {
+  it("creates the six foundation tables", async () => {
+    const names = ["communication_providers", "communication_templates", "communication_campaigns", "communication_messages", "communication_deliveries", "communication_webhooks"];
     const r = await t.db.query<{ n: number }>(
-      `SELECT COUNT(*)::int AS n FROM information_schema.tables WHERE table_schema='public' AND table_name LIKE 'communication\\_%'`,
+      `SELECT COUNT(*)::int AS n FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE' AND table_name = ANY($1)`,
+      [names],
     );
     assert.equal(r.rows[0].n, 6);
   });
 
   it("can be applied a second time without error (policies are dropped and recreated)", async () => {
     await t.db.exec(communicationMigrationSql());
+    await t.db.exec(campaignsMigrationSql());
     const r = await t.db.query<{ n: number }>(`SELECT COUNT(*)::int AS n FROM pg_policies WHERE tablename='communication_messages'`);
     assert.equal(r.rows[0].n, 1, "exactly one (SELECT) policy after a re-run, not duplicates");
   });

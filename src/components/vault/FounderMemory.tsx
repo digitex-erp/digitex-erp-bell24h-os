@@ -4,7 +4,8 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Brain, History, Plus, AlertTriangle, Lightbulb, MessageSquare, Loader2 } from "lucide-react";
-import { authedFetchJson, AuthedFetchError } from "@/lib/authedFetch";
+import { authedFetchJson } from "@/lib/authedFetch";
+import { vaultLoadError } from "@/lib/diagnosticsErrors";
 
 interface Decision {
   id: string;
@@ -29,11 +30,7 @@ export function FounderMemory() {
       })
       .catch(err => {
         console.error("Failed to fetch decisions:", err);
-        setError(
-          err instanceof AuthedFetchError && err.status === 401
-            ? "Your session could not be verified — try signing in again."
-            : "Could not load the decision log.",
-        );
+        setError(vaultLoadError(err, "the decision log"));
         setDecisions([]);
         setLoading(false);
       });

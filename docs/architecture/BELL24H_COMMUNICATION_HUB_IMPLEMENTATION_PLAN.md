@@ -1,5 +1,7 @@
 # BELL24H COMMUNICATION HUB IMPLEMENTATION PLAN
 
+> **Provider scope update (owner decision, 2026-09-28):** approved providers are Resend + SMTP (email), Meta WhatsApp Cloud API direct (WhatsApp), and MSG91 (SMS / OTP only). **Twilio and WhatsApp-via-MSG91 are removed from scope** and any reference below to them is superseded. Adapters, webhook routes and phases for those providers no longer apply. Spur and Gupshup/Exotel remain deferred.
+
 **Repository:** `digitex-erp/digitex-erp-bell24h-os` (`HEAD = bd31707`)
 **Phase:** Communication Hub Foundation Sprint — **planning and architecture only**
 **Date:** 2026-09-14
@@ -189,7 +191,7 @@ reflects how much of the target architecture is blocked by each gap.
 | **No process anywhere can dequeue work.** Vercel serverless has no persistent process; `JobWorker` (the only precedent) is browser-only and disabled. | **CRITICAL** | Every downstream component (dispatch, retry, webhook processing) needs *something* running continuously or on a schedule. Nothing today satisfies that outside a request/response cycle. |
 | **No durable, atomic job/queue claim exists.** `job_queue`'s only consumer used a plain `SELECT`, not `FOR UPDATE SKIP LOCKED` — a correctness gap, not just an absence. | **CRITICAL** | A retry/dispatch queue with concurrent workers (even two Vercel Cron invocations overlapping) would double-process without this. |
 | **No provider abstraction/adapter layer for communication exists.** | **CRITICAL** | This is the mission's core ask; zero code exists (`server/`, `src/`, `api/` all searched, zero hits for whatsapp/msg91/twilio/spur/sendgrid/nodemailer/resend). |
-| **No webhook signature verification pattern exists anywhere in the repo.** | **CRITICAL** | Every provider (Meta, MSG91, Twilio) requires verifying an inbound signature before trusting a webhook body; there is no existing convention to extend. |
+| **No webhook signature verification pattern exists anywhere in the repo.** | **CRITICAL** | Every provider (Meta, MSG91) requires verifying an inbound signature before trusting a webhook body; there is no existing convention to extend. |
 | **No RBAC/`authorize()` primitive exists.** | **HIGH** | Blocks admin-scoped endpoints (`/providers`, `/providers/test`, template approval) from having real authorization; today "authenticated" and "authorized" are the same check. |
 | **No durable audit persistence exists.** `server/audit.ts` is stdout-only by its own header comment. | **HIGH** | SECURITY_BASELINE.md requires durable audit coverage for "provider changes" and "administrative actions" — both apply directly to a Communication Hub. |
 | **No event bus/outbox exists.** | **HIGH** | ADR-006 states inbound webhooks should convert to domain events, not invoke business logic directly. Without an event bus, webhook processing must call the delivery-update logic directly for now — an accepted MVP simplification, not the frozen target shape. |
@@ -211,7 +213,7 @@ the existing `ProviderManager`/`ProviderRouter` pattern — not a new design.
 |---|---|---|
 | **Notification Service** | The single entry point capability (`send`, `bulk-send`, `status`) that a caller (VyaparSethu, or an internal Bell24h-OS module) calls. Resolves channel + template, validates the request, writes `message_requests`, hands off to the Message Routing Layer. Never talks to a provider directly. | `ProviderRouter.generateText()` — a thin, auditable front door in front of provider execution. |
 | **Message Routing Layer** | Given a `message_requests` row, decides *which* provider handles it (single-provider-per-channel for MVP; capability/health/priority-based selection once the Provider Registry has more than one option per channel). Owns no provider SDK itself. | The `provider` field switch in `/api/v1/ai/text` (Gemini vs. NVIDIA) — the same shape, generalized. |
-| **Provider Adapter Layer** | One adapter per provider (`MetaWhatsAppAdapter`, `Msg91Adapter`, `TwilioAdapter`, `SpurAdapter`, `EmailAdapter`, `SmsAdapter`), each implementing one shared interface (Section 8). Holds no business logic — only "how to talk to this provider." | `GeminiProvider.ts` / `NvidiaProvider.ts` — same shape (`generateText(req)` → `execute(message)`). |
+| **Provider Adapter Layer** | One adapter per provider (`MetaWhatsAppAdapter`, `Msg91Adapter`, `SpurAdapter`, `EmailAdapter`, `SmsAdapter`), each implementing one shared interface (Section 8). Holds no business logic — only "how to talk to this provider." | `GeminiProvider.ts` / `NvidiaProvider.ts` — same shape (`generateText(req)` → `execute(message)`). |
 | **Provider Registry** | The catalog of what providers exist, their channel type, capability flags, and configuration status (never credential values) — the "Connector" half of ADR-006's three-part separation. Backs `GET /api/v1/providers`. | No direct precedent; new, but data-only — mirrors `ai_providers` *minus* the `api_key` column mistake. |
 | **Delivery Tracking Layer** | Owns `message_deliveries` / `message_events` — the current-status and full-timeline views of every send attempt, populated by both the dispatch path (outbound) and the webhook path (inbound provider confirmations). | No precedent; net-new, but modeled directly on the `job_queue`/`job_logs` split already in the schema. |
 | **Retry Layer** | Owns `retry_queue`, using an atomic claim (`FOR UPDATE SKIP LOCKED`) that the existing `job_queue`/`JobWorker` pattern lacks — this is a **correction**, not a repetition, of that gap. Exponential backoff, bounded `max_attempts`, per `AI_ROUTER_POLICY.md`'s existing retry principle ("retry only transient failures with bounded exponential backoff and idempotency"). | `AI_ROUTER_POLICY.md`'s retry/circuit-breaker policy (currently normative-only, not implemented even for AI) — the Communication Hub would be the first place either system actually implements it. |
@@ -221,7 +223,7 @@ the existing `ProviderManager`/`ProviderRouter` pattern — not a new design.
 
 ### 4.1 Provider Adapter Design — shared contract
 
-Every adapter (`MetaWhatsAppAdapter`, `Msg91Adapter`, `TwilioAdapter`, `SpurAdapter`,
+Every adapter (`MetaWhatsAppAdapter`, `Msg91Adapter`, `SpurAdapter`,
 `EmailAdapter`, `SmsAdapter`) implements the same conceptual interface, matching the
 shape `GeminiProvider.ts`/`NvidiaProvider.ts` already establish for AI:
 
@@ -230,7 +232,7 @@ shape `GeminiProvider.ts`/`NvidiaProvider.ts` already establish for AI:
   normalized result (`provider_message_id`, `status`, `latency_ms`) or throws a typed
   error.
 - `verifyWebhookSignature(headers, rawBody): boolean` — required for any provider that
-  sends webhooks (Meta, MSG91, Twilio); a no-op returning `true` for providers that don't
+  sends webhooks (Meta, MSG91); a no-op returning `true` for providers that don't
   (some SMS/email providers only offer polling).
 - `checkHealth(): Promise<boolean>` — optional for MVP (Section 3 rates this LOW), useful
   once the Provider Registry supports failover.
@@ -240,11 +242,10 @@ shape `GeminiProvider.ts`/`NvidiaProvider.ts` already establish for AI:
 | Provider | Channel | Notable adapter-specific behavior |
 |---|---|---|
 | Meta WhatsApp Cloud API | WhatsApp | Requires pre-approved templates for business-initiated conversations; 24-hour session window for free-form replies; webhook signature via `X-Hub-Signature-256`. |
-| MSG91 | SMS / WhatsApp | Single provider offering both channels; template/DLT registration requirements specific to Indian SMS regulation. |
-| Twilio | SMS / WhatsApp / Voice | Broadest channel coverage of the six; per-channel sub-products (Twilio's WhatsApp is itself a wrapper over Meta's Cloud API — a detail that affects whether it's a true independent channel or an alternate path to the same Meta account, worth confirming before Phase 5 commits to it as a distinct provider). |
-| Spur | WhatsApp (commerce-focused) | Named in the target architecture with no further detail available from this repository or session — its API shape is unverified; Phase 5 scoping should not assume feature parity with Meta/Twilio until confirmed. |
+| MSG91 | SMS / OTP only | WhatsApp via MSG91 is removed (WhatsApp goes direct via Meta Cloud API). Retained for SMS/OTP; template/DLT registration requirements specific to Indian SMS regulation. |
+| Spur | WhatsApp (commerce-focused) | Named in the target architecture with no further detail available from this repository or session — its API shape is unverified; Phase 5 scoping should not assume feature parity with Meta until confirmed. |
 | Email (provider unspecified — `.env.example` lists `RESEND_API_KEY`, unused by any code) | Email | Lowest regulatory friction of the six; no template pre-approval requirement typical of WhatsApp. |
-| SMS (provider unspecified — MSG91/Twilio both also cover this channel) | SMS | May not need a *seventh* adapter if MSG91 or Twilio already covers plain SMS — worth resolving as a Phase 5 scoping question rather than building a redundant adapter. |
+| SMS (provider unspecified — MSG91 covers this channel) | SMS | May not need a *seventh* adapter if MSG91 already covers plain SMS — worth resolving as a Phase 5 scoping question rather than building a redundant adapter. |
 
 ### 4.3 Error handling
 
@@ -282,7 +283,7 @@ imported from `src/`):
 ```
 server/
   communication/
-    adapters/          # One file per provider: metaWhatsApp.ts, msg91.ts, twilio.ts,
+    adapters/          # One file per provider: metaWhatsApp.ts, msg91.ts,
                         # spur.ts, email.ts, sms.ts — each implements the shared
                         # ProviderAdapter interface (Section 8). Holds provider-specific
                         # request/response shaping only, never business logic.
@@ -298,7 +299,6 @@ server/
                         # actual scheduling/hosting mechanism is a Phase 1 decision
                         # (Section 12), not fixed by this folder layout.
     webhooks/             # One handler per provider: metaWebhook.ts, msg91Webhook.ts,
-                        # twilioWebhook.ts — signature verification + raw capture into
                         # webhook_events, before any interpretation.
     audit/                # CommunicationAudit.ts — thin wrapper around the existing
                         # emitAuditEvent(), scoping the `action` namespace to
@@ -341,7 +341,7 @@ standard `"Org isolation {select,insert,update,delete}"` policies using
 | **message_templates** | Org-owned reusable outbound content, with provider-approval tracking (Meta requires pre-approved templates). | `id` | `organization_id`, `channel_type`, `provider_id` (FK, nullable for channel-generic templates), `template_key`, `body`, `variables` (jsonb), `provider_template_id` (nullable), `approval_status` (`draft`\|`pending_provider_approval`\|`approved`\|`rejected`), `created_by` | FK → `organizations`, `communication_providers`, `profiles` | **Yes** |
 | **message_requests** | One row per logical send request (the caller's "intent") — the idempotency anchor. | `id` | `organization_id`, `caller_type` (`user`\|`service`), `caller_id`, `channel_type`, `template_id` (FK, nullable), `provider_id` (FK, resolved), `recipient` (PII — see Section 9 on handling), `idempotency_key` (unique per `organization_id`), `status` (`queued`\|`dispatching`\|`sent`\|`delivered`\|`failed`\|`cancelled`), `priority` | FK → `organizations`, `message_templates`, `communication_providers` | **Yes** |
 | **message_deliveries** | One row per provider-level send attempt (1:N with `message_requests` — retries create additional rows). | `id` | `message_request_id` (FK), `attempt_number`, `provider_message_id` (external ID), `status`, `error_code`, `error_message`, `latency_ms`, `sent_at`, `delivered_at` | FK → `message_requests` | Inherits tenancy via `message_request_id` join — no direct `organization_id` needed if the RLS policy is expressed as an `EXISTS` subquery against `message_requests`, matching the existing `job_dependencies`/`job_logs` convention exactly |
-| **message_events** | Append-only timeline of every state transition for a delivery — finer grain than `message_deliveries`' current-status columns; tolerant of out-of-order webhook delivery. | `id` | `message_delivery_id` (FK), `event_type` (`queued`\|`sent`\|`delivered`\|`read`\|`failed`\|`bounced`), `event_source` (`system`\|`webhook:meta`\|`webhook:msg91`\|`webhook:twilio`), `raw_payload` (jsonb, redacted), `occurred_at`, `received_at` | FK → `message_deliveries` | Inherits tenancy via join, same pattern as above |
+| **message_events** | Append-only timeline of every state transition for a delivery — finer grain than `message_deliveries`' current-status columns; tolerant of out-of-order webhook delivery. | `id` | `message_delivery_id` (FK), `event_type` (`queued`\|`sent`\|`delivered`\|`read`\|`failed`\|`bounced`), `event_source` (`system`\|`webhook:meta`\|`webhook:msg91`\), `raw_payload` (jsonb, redacted), `occurred_at`, `received_at` | FK → `message_deliveries` | Inherits tenancy via join, same pattern as above |
 | **notification_logs** | The read-optimized, queryable surface behind `GET /api/v1/notifications/status/:id`. **Recommended as a VIEW over `message_requests`/`message_deliveries`, not a physical table** — a duplicated, independently-written table here would repeat the `image_*`/`video_*` anti-pattern (`MASTER_API_BOUNDARIES.md` L5). If a physical, denormalized table is later needed for query performance, it must be populated only by the same write path as `message_requests`/`message_deliveries`, never written independently. | (view — no independent PK) | Projected: request id, status, channel, provider, last event, attempt count | Derived, not owned | Follows `message_requests`' tenancy |
 | **communication_audit** | Durable audit trail for communication actions, once durable audit persistence exists (Section 3, Section 12). **If a general L1 durable audit sink is built first, this should be rows in that shared table filtered by an `action` prefix (`communication.*`), not a parallel audit system** — flagged as a sequencing dependency, not a design choice this plan is free to make unilaterally. | `id` | `actor` (nullable), `organization_id` (nullable — platform-level events have none), `action`, `target_type`, `target_id`, `outcome`, `request_id`, `metadata` (jsonb, secrets redacted) | Loosely coupled by `target_id`/`target_type` to `message_requests`, `provider_credentials`, etc. | Mixed — organization-scoped rows and platform-level rows coexist, same as `emitAuditEvent`'s existing shape allows (`organizationId: null` is already a valid call today) |
 | **retry_queue** | Durable, atomically-claimable retry scheduling — the concurrency-safety property `job_queue`/`JobWorker` never had (`RUNTIME_BASELINE_REPORT.md`: "not addressed, currently moot ... becomes real the moment more than one consumer exists"). | `id` | `message_delivery_id` (FK), `organization_id`, `attempt_number`, `next_attempt_at`, `backoff_seconds`, `max_attempts`, `status` (`pending`\|`claimed`\|`exhausted`\|`resolved`), `claimed_by` (worker id, nullable), `claimed_at` | FK → `message_deliveries`, `organizations` | **Yes** |
@@ -368,7 +368,6 @@ verification instead, since an external provider cannot hold our service token.
 | `/api/v1/templates` | GET | `requireAuth` | — | List of the caller's org's templates | |
 | `/api/v1/webhooks/meta` | POST | Meta signature verification (`X-Hub-Signature-256`), not `requireAuth`/`requireServiceAuth` | Meta's webhook payload shape | `200` acknowledgment only | Must write to `webhook_events` **before** any interpretation, per Section 4's Webhook Processing Layer design — an unverifiable payload is still captured, then rejected. |
 | `/api/v1/webhooks/msg91` | POST | MSG91's signature/shared-secret scheme | MSG91's webhook payload shape | `200` acknowledgment only | Same capture-first discipline. |
-| `/api/v1/webhooks/twilio` | POST | Twilio signature (`X-Twilio-Signature`) | Twilio's webhook payload shape | `200` acknowledgment only | Same capture-first discipline. |
 
 ## 8. Worker Architecture
 
@@ -452,7 +451,7 @@ schedule outside the request/response cycle. Options, not a chosen path:
 | **Must Have** | One working channel end-to-end (recommend WhatsApp via Meta, per the mission's own Phase 2 ordering) proven with the same discipline NVIDIA was proven (mock/local verification → operator-performed real production proof, no secret touched by any session); `message_requests`/`message_deliveries`/`message_events` tables; `POST /api/v1/notifications/send` behind `requireServiceAuth`; idempotency-key enforcement; a resolved hosting decision for "what dequeues" (Section 8) — even a minimal one; platform-level credential storage only; audit events emitted (durable persistence not required for MVP, explicitly noted as degraded). |
 | **Should Have** | `GET /api/v1/notifications/status/:id`; `retry_queue` with atomic claim and bounded backoff; webhook processing for the one MVP channel, with signature verification and raw capture; `message_templates` for the one MVP channel. |
 | **Nice to Have** | `GET /api/v1/providers` / provider health checks; `POST /api/v1/providers/test`; bulk-send; a Delivery Sync Worker (polling reconciliation) for providers without reliable webhooks. |
-| **Out of Scope (this MVP)** | Every provider beyond the first (MSG91, Twilio, Spur, Email, SMS — Phase 5); org-scoped bring-your-own credentials (Phase 7, blocked on L0 KMS); RBAC-gated admin endpoints (blocked on L1 `authorize()`); event-bus-based webhook-to-domain-event conversion (blocked on L2 event bus); multi-provider failover/health-based routing. |
+| **Out of Scope (this MVP)** | Every provider beyond the first (MSG91 SMS/OTP, Spur, Email — Phase 5); org-scoped bring-your-own credentials (Phase 7, blocked on L0 KMS); RBAC-gated admin endpoints (blocked on L1 `authorize()`); event-bus-based webhook-to-domain-event conversion (blocked on L2 event bus); multi-provider failover/health-based routing. |
 
 ## 11. VyaparSethu Migration Plan
 
@@ -501,7 +500,7 @@ cannot be designed from within this repository.
 | **Phase 2 — Meta WhatsApp Adapter** | First real provider behind the Phase 1 interface, following the exact Gemini→NVIDIA proof discipline: mock/local verification, then an operator-performed real production proof call — no secret ever touched by a Claude Code session. | Meta Business/WhatsApp Cloud API account and credentials (operator-held, per Section 9's platform-level scoping). |
 | **Phase 3 — Template Management** | `message_templates` CRUD; Meta template submission/approval-status tracking. | Depends on Phase 2's adapter existing to actually submit templates. |
 | **Phase 4 — Delivery Tracking** | `webhook_events` + `message_events`; Meta webhook signature verification; `GET /api/v1/notifications/status/:id`; optional Delivery Sync Worker. | Requires a publicly reachable webhook URL and Meta webhook configuration (operator action). |
-| **Phase 5 — Multi-Provider Support** | MSG91, Twilio, Spur, Email, SMS adapters, added the same additive way NVIDIA was added to Gemini. Resolve the "is Twilio WhatsApp a distinct provider or an alternate Meta path" and "does SMS need its own adapter beyond MSG91/Twilio" questions (Section 9.2) before committing adapter-by-adapter scope. | Each provider needs its own operator-held account/credentials. |
+| **Phase 5 — Multi-Provider Support** | MSG91 (SMS/OTP), Spur, Email adapters, added the same additive way NVIDIA was added to Gemini. Resolve the "does SMS need its own adapter beyond MSG91" question (Section 9.2) before committing adapter-by-adapter scope. | Each provider needs its own operator-held account/credentials. |
 | **Phase 6 — Orchestration Workers** | Full Retry Worker with backoff (Section 8); durable `communication_audit` once a durable audit sink exists; provider health checks feeding Message Routing Layer failover decisions. | Durable audit persistence is a cross-cutting L1 dependency, not owned by Communication Hub work alone. |
 | **Phase 7 — Full Bell24h Communication Platform** | Org-scoped provider bindings/credentials (ADR-006's full Connector/Binding/Credential realization); RBAC-gated admin endpoints; event-bus-based webhook-to-domain-event conversion. | Explicitly blocked on three platform primitives outside Communication Hub's own scope: L0 secret/KMS infrastructure, L1 `authorize()`, L2 event bus. This phase cannot start by Communication Hub work alone. |
 

@@ -78,11 +78,14 @@ export interface CommunicationMessage {
   subject: string | null;
   body: string | null;
   variables_used: Record<string, unknown>;
+  /** WhatsApp only: the Meta template reference actually handed to the provider for this message. */
+  provider_template?: { name: string; language: string; parameters: string[] } | null;
   status: MessageStatus;
   provider_message_id: string | null;
   error_message: string | null;
   retry_count: number;
   max_retries: number;
+  is_test?: boolean;
   scheduled_at: string | null;
   sent_at: string | null;
   created_by: string | null;
@@ -132,6 +135,8 @@ export interface SendMessageInput {
   createdBy?: string;
   /** Caller-supplied key; the same (organizationId, idempotencyKey) always maps to one message. */
   idempotencyKey?: string;
+  /** Test sends are real sends to one operator-chosen address; they never count toward campaign totals. */
+  isTest?: boolean;
 }
 
 export interface ScheduleMessageInput extends SendMessageInput {
@@ -147,6 +152,8 @@ export interface ScheduleMessageInput extends SendMessageInput {
 // ---------------------------------------------------------------------------
 
 export interface OutboundMessage {
+  /** WhatsApp only: send as this approved Meta TEMPLATE (overrides the provider-level default template). */
+  template?: { name: string; language: string; parameters: string[] };
   recipient: string;
   subject?: string;
   body: string;
@@ -154,6 +161,8 @@ export interface OutboundMessage {
   /** Stable per-message key. Passed to providers that support idempotent sends so a worker
    *  re-run after a crash cannot deliver a second copy (Resend: Idempotency-Key header). */
   idempotencyKey?: string;
+  /** Campaign email only: the signed one-click unsubscribe link, sent as List-Unsubscribe headers (RFC 8058). */
+  unsubscribeUrl?: string;
 }
 
 /** Non-secret settings resolved from communication_providers.settings, plus
@@ -193,6 +202,8 @@ export interface ProviderAdapter {
   /** Registry key, must match communication_providers.provider. */
   readonly provider: string;
   readonly channelType: ChannelType;
+  /** True for a placeholder that cannot send. Real adapters leave this undefined. */
+  readonly isStub?: boolean;
 
   send(message: OutboundMessage, config: ResolvedProviderConfig): Promise<AdapterSendResult>;
   status(providerMessageId: string, config: ResolvedProviderConfig): Promise<AdapterStatusResult>;

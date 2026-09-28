@@ -37,6 +37,17 @@ const BOOTSTRAP = `
   CREATE TABLE public.profiles (
     id UUID PRIMARY KEY, email TEXT, organization_id UUID REFERENCES public.organizations(id)
   );
+  CREATE TABLE public.companies (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(), name TEXT NOT NULL,
+    organization_id UUID REFERENCES public.organizations(id), deleted_at TIMESTAMPTZ
+  );
+  CREATE TABLE public.contacts (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    company_id UUID REFERENCES public.companies(id),
+    first_name TEXT, last_name TEXT, email TEXT, phone TEXT,
+    organization_id UUID REFERENCES public.organizations(id),
+    created_at TIMESTAMPTZ DEFAULT NOW(), deleted_at TIMESTAMPTZ
+  );
   CREATE TABLE public.roles (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(), name TEXT NOT NULL,
     organization_id UUID REFERENCES public.organizations(id), deleted_at TIMESTAMPTZ
@@ -73,6 +84,10 @@ function jobQueueDdl(): string {
 
 export function communicationMigrationSql(): string {
   return fs.readFileSync(path.join(REPO_ROOT, "add_communication_hub.sql"), "utf8");
+}
+
+export function campaignsMigrationSql(): string {
+  return fs.readFileSync(path.join(REPO_ROOT, "add_communication_campaigns.sql"), "utf8");
 }
 
 /** pg.Pool-shaped adapter over one PGlite connection. Each connect() holds a mutex until release(). */
@@ -116,6 +131,8 @@ export async function createTestDb(): Promise<TestDb> {
   await db.exec(BOOTSTRAP);
   await db.exec(jobQueueDdl());
   await db.exec(communicationMigrationSql());
+  await db.exec(campaignsMigrationSql());
+  await db.exec(fs.readFileSync(path.join(REPO_ROOT, "add_whatsapp_template_mapping.sql"), "utf8"));
   const pool = toPool(db);
   // QueueManager is a process-wide singleton bound to its first pool; rebind it to this test DB.
   (QueueManager as unknown as { instance: QueueManager | null }).instance = null;
@@ -148,4 +165,9 @@ export async function seedUser(db: PGlite, orgId: string, roleNames: string[]): 
     await db.query(`INSERT INTO public.user_roles (user_id, role_id, organization_id) VALUES ($1, $2, $3)`, [id, roleId, orgId]);
   }
   return id;
+}
+
+/** Applies an additional REAL migration file from the repo root to a test database. */
+export async function applyMigration(db: PGlite, fileName: string): Promise<void> {
+  await db.exec(fs.readFileSync(path.join(REPO_ROOT, fileName), "utf8"));
 }

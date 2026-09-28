@@ -6,6 +6,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { CheckCircle, XCircle, AlertTriangle, RefreshCw, Shield, ShieldCheck, Database, Server, Monitor, Zap, Search, Megaphone, Share2, Workflow, LineChart, Globe, Cpu, Activity, Lock, Fingerprint } from "lucide-react";
 import { supabase, SUPABASE_CONFIGURED, supabaseProjectId } from "@/lib/supabase";
 import { useAuthStore } from "@/store/useAuthStore";
+import { authedFetchJson } from "@/lib/authedFetch";
+import { diagnosticError } from "@/lib/diagnosticsErrors";
 
 export function SystemDiagnosticsPage() {
   const [serverEnv, setServerEnv] = useState<any>(null);
@@ -32,6 +34,7 @@ export function SystemDiagnosticsPage() {
   const [migrationResult, setMigrationResult] = useState<any>(null);
   const [tableCheck, setTableCheck] = useState<any>(null);
   const [userCount, setUserCount] = useState<any>(null);
+  const [vaultHealth, setVaultHealth] = useState<any>(null);
 
   const runMigration = async () => {
     setMigrating(true);
@@ -53,23 +56,34 @@ export function SystemDiagnosticsPage() {
     }
   };
 
+  // These routes are requireAuth + ADMIN-role gated on the server. They previously used a bare fetch() with
+  // no Authorization header, so the server (correctly) answered 401 and the page printed
+  // "Error: unauthenticated" as though the database were unhealthy. Now the caller's session token is sent,
+  // and a missing session / missing role is reported as exactly that.
   const fetchTableCheck = async () => {
     try {
-      const resp = await fetch('/api/check-table');
-      const data = await resp.json();
-      setTableCheck(data);
+      setTableCheck(await authedFetchJson<any>('/api/check-table'));
     } catch (e) {
-      console.error("Table check failed", e);
+      const o = diagnosticError(e);
+      setTableCheck({ error: o.message, warn: o.status === 'warn' });
     }
   };
 
   const fetchUserCount = async () => {
     try {
-      const resp = await fetch('/api/check-users-count');
-      const data = await resp.json();
-      setUserCount(data);
+      setUserCount(await authedFetchJson<any>('/api/check-users-count'));
     } catch (e) {
-      console.error("User count fetch failed", e);
+      const o = diagnosticError(e);
+      setUserCount({ error: o.message, warn: o.status === 'warn' });
+    }
+  };
+
+  const fetchVaultHealth = async () => {
+    try {
+      setVaultHealth(await authedFetchJson<any>('/api/vault/health'));
+    } catch (e) {
+      const o = diagnosticError(e);
+      setVaultHealth({ error: o.message, warn: o.status === 'warn' });
     }
   };
 
@@ -77,6 +91,7 @@ export function SystemDiagnosticsPage() {
     setLoading(true);
     fetchTableCheck();
     fetchUserCount();
+    fetchVaultHealth();
     const newDiagnostics = { ...diagnostics };
 
     // 1. Fetch Server Env
@@ -363,9 +378,27 @@ export function SystemDiagnosticsPage() {
                 </TableRow>
                 <TableRow>
                   <TableCell className="font-medium text-amber-600">Direct DB Connection (Admin)</TableCell>
-                  <TableCell><StatusIcon status={tableCheck?.success ? 'pass' : (tableCheck?.error ? 'fail' : 'pending')} /></TableCell>
+                  <TableCell><StatusIcon status={tableCheck?.success ? 'pass' : (tableCheck?.error ? (tableCheck.warn ? 'warn' : 'fail') : 'pending')} /></TableCell>
                   <TableCell className="text-xs">
-                    {tableCheck?.success ? 'Verified: Admin connection stable' : (tableCheck?.error ? `Error: ${tableCheck.error}` : 'Testing direct DATABASE_URL...')}
+                    {tableCheck?.success ? 'Verified: server reached the database over DATABASE_URL' : (tableCheck?.error ? tableCheck.error : 'Testing direct DATABASE_URL...')}
+                  </TableCell>
+                </TableRow>
+                <TableRow>
+                  <TableCell className="font-medium">Knowledge Vault tables</TableCell>
+                  <TableCell>
+                    <StatusIcon status={vaultHealth ? (vaultHealth.error ? (vaultHealth.warn ? 'warn' : 'fail') : (vaultHealth.ok ? 'pass' : 'fail')) : 'pending'} />
+                  </TableCell>
+                  <TableCell className="text-xs space-y-1">
+                    {!vaultHealth && 'Checking vault tables as your user...'}
+                    {vaultHealth?.error && vaultHealth.error}
+                    {vaultHealth?.tables && (vaultHealth.ok ? `All ${vaultHealth.tables.length} vault tables readable` : (
+                      <>
+                        {vaultHealth.remedy && <div className="font-medium">{vaultHealth.remedy}</div>}
+                        {vaultHealth.tables.filter((t: any) => !t.ok).map((t: any) => (
+                          <div key={t.table} className="font-mono break-words">{t.table}: {t.reason}{t.status ? ` (HTTP ${t.status})` : ''} — {t.detail}</div>
+                        ))}
+                      </>
+                    ))}
                   </TableCell>
                 </TableRow>
                 <TableRow>

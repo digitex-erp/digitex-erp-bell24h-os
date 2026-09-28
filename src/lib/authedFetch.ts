@@ -39,7 +39,9 @@ export async function authedFetchJson<T>(path: string, init: RequestInit = {}): 
     let detail = "";
     try {
       const body = await res.json();
+      // `error` is a stable code; `detail` (when the route provides one) is the human-actionable reason.
       detail = typeof body?.error === "string" ? body.error : "";
+      if (typeof body?.detail === "string" && body.detail) detail = detail ? `${detail}: ${body.detail}` : body.detail;
     } catch {
       // response body wasn't JSON — leave detail empty, status still reported
     }
