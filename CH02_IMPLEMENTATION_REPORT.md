@@ -13,6 +13,13 @@
 | **Communications Hub** | **NOT certified** | No real provider has ever completed a send; the schema is not applied anywhere; unsubscribe env is unset; no durable audit table exists (§6). |
 | **Scheduler (InsForge → worker tick)** | **NOT certified** | `npx tsx scripts/certify-scheduler.ts` run against the linked InsForge project today: **0 schedules exist → NOT CERTIFIED** (exit 1). The checker only says CERTIFIED with evidence (§4). |
 
+| Item from the brief | Status |
+|---|---|
+| **Knowledge Vault "Could not load documents"** | **NOT confirmed fixed.** Only its diagnosability was improved; whether documents load is unknown until the query in §3 #1 is run against the live database. |
+| **Admin Diagnostics "unauthenticated"** | Fixed in code (missing Authorization header); not re-observed on a deployed build. |
+| **Industry Intelligence blank page** | Not investigated. |
+| **AI Providers 0/6** | Not code — needs credentials. |
+
 | Gate | Result |
 |---|---|
 | `npx tsc --noEmit` | **PASS** (exit 0) |
@@ -28,9 +35,9 @@
 3. **"Industry Intelligence blank page"** — the page and route exist (`/industry-dashboard`); the cause was **not investigated** (needs an authenticated browser session against the live backend; not in the CH-02 task list). Reported under Pending.
 4. **"AI Providers 0/6"** is a credentials matter, not a code defect (Blocked / Requires Credentials).
 
-## 3. Completed
+## 3. Completed (item #1 is only partly done — read its heading)
 
-### #1 Knowledge Vault document loading — diagnosability fixed; root cause needs one query
+### #1 Knowledge Vault document loading — NOT confirmed fixed (diagnosability improved only; root cause unknown until the query below is run)
 - `server/lib/vaultHealth.ts` + `GET /api/vault/health` (auth required): asks PostgREST *as the caller* for one row of each of `vault_documents, rd_library, timeline_milestones, phases, decision_records` and classifies each failure `table_missing | permission_denied | server_unconfigured | upstream_error` with the upstream detail (capped) and a remedy.
 - The five vault components now show the real reason (`vaultLoadError`) instead of "Could not load documents"; `authedFetch` errors now include the server's `detail`. Diagnostics page has a new **Knowledge Vault tables** row.
 - **To find the actual cause, run this read-only query in the Supabase SQL editor and paste the result:**
@@ -85,11 +92,12 @@ See §4.
 
 ## 6. Pending
 - **Industry Intelligence blank page** — not investigated (§2 #3).
-- **Knowledge Vault root cause** — needs the §3 #1 query result.
+- **Knowledge Vault: loading is still unconfirmed** — root cause needs the §3 #1 query result; the actual fix (e.g. applying `add_knowledge_vault.sql`) has not been done.
 - **Durable audit table** — `server/audit.ts` writes structured JSON to stdout only; the durable per-send record is `communication_messages` + `communication_deliveries`. Deferred by design (schema decision).
 - **Provider-reported failures after acceptance** (e.g. a WhatsApp delivery failure) update the message and Logs but not the campaign counters, which reflect provider acceptance.
 - **CSV import / export of lists and suppressions**, bounce/complaint **webhook ingestion for Resend** (so `bounced`/`complained` suppressions arrive automatically — today only unsubscribes and manual entries do): not built.
 - **Provider/channel mismatch is not constrained in SQL** (`provider='msg91', channel_type='whatsapp'` is schema-legal; fails closed today because MSG91 is a stub) — add a check in Sprint C2.
+- **Oversized list-member batches (> ~5,000 ids) are refused by the JSON body-size limit (HTTP 413) before the service's own "at most 5000 items" check runs**, so that message is effectively unreachable for very large arrays; behaviour is still a safe refusal.
 - **Rate limits are in-memory per instance**; email bodies are HTML and not escaped (C0 carry-overs).
 - Queued after CH-02, read but not started: **Research Consolidation Sprint** (3 planning files) and **SEO & Positioning Plan** (1 file).
 
