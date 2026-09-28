@@ -102,6 +102,8 @@ Edited (forward-looking): `BELL24H_COMMUNICATION_HUB_IMPLEMENTATION_PLAN.md`, `B
 - **Email bodies are HTML and not escaped**; template variables can inject markup (carried over from C0).
 - **Quotas count test sends** and are per organization/channel; per-minute rate limits are in-memory per instance (C0 limitation).
 - **UI not exercised with real Supabase login** (harness stubs auth); real-session behaviour rests on the existing `authedFetch` + server-side `requireAuth`, unchanged.
+- **Provider/channel mismatch is not constrained in SQL.** `communication_providers.channel_type` is not tied to the provider's own channel, so an operator insert of `provider='msg91', channel_type='whatsapp'` is schema-legal. Today it fails closed (the MSG91 stub throws). When MSG91 becomes real (Sprint C2) such a row would misroute WhatsApp traffic through an SMS provider — add a check (or validate in the worker) as part of C2.
+- **DECISION NEEDED — Meta WhatsApp scope.** The brief said "future-ready only"; a working Graph-API adapter and a mounted, signature-verified webhook route are committed (unverified, fail-closed, but present). If "future-ready" meant *interface only until approved*, revert `MetaWhatsAppCloudProvider.ts`, `whatsappWebhook.ts` and the two webhook routes to a stub. Not resolved by this report — it needs your yes/no.
 - **This branch is local only.** Nothing pushed; PR #1 (C0) is untouched.
 
 ## 10. Files
