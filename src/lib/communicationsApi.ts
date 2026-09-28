@@ -53,13 +53,16 @@ export const communicationsApi = {
   getDashboard: () => authedFetchJson<CommDashboard>(`${BASE}/dashboard`),
   listSchedules: () => authedFetchJson<{ schedules: CommSchedule[]; worker: CommWorkerEvidence }>(`${BASE}/schedules`),
   listTemplates: (channelType?: CommChannel) => authedFetchJson<{ templates: CommTemplate[] }>(`${BASE}/templates${qs({ channelType })}`),
-  createTemplate: (b: { name: string; channelType: CommChannel; subject?: string; body: string }) =>
+  createTemplate: (b: { name: string; channelType: CommChannel; subject?: string; body: string; providerTemplateName?: string; providerTemplateLanguage?: string; providerTemplateVariables?: string[] }) =>
     post<{ success: true; template: CommTemplate }>("/templates", b),
 
   listLeads: (p: { channelType: CommChannel; q?: string; limit?: number; offset?: number }) =>
     authedFetchJson<{ leads: CommLead[]; limit: number; offset: number }>(`${BASE}/leads${qs(p)}`),
 
-  updateTemplate: (id: string, b: { name?: string; subject?: string; body?: string; isActive?: boolean }) =>
+  updateTemplate: (
+    id: string,
+    b: { name?: string; subject?: string; body?: string; isActive?: boolean; providerTemplateName?: string; providerTemplateLanguage?: string; providerTemplateVariables?: string[] },
+  ) =>
     send<{ success: true; template: CommTemplate }>("PATCH", `/templates/${id}`, b),
 
   /** Exactly ONE of contactIds / listId / segmentId. */

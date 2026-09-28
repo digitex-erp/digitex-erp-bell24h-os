@@ -151,7 +151,7 @@ const check = (name, cond, detail = "") => {
   await page.getByText("Resend (TEST DOUBLE)").waitFor();
   const provText = await text();
   check("providers tab: credentials configured, but UNVERIFIED (no real send yet)", provText.includes("configured") && provText.includes("unverified"));
-  await page.getByRole("button", { name: "Health check" }).click();
+  await page.getByRole("row", { name: /Resend \(TEST DOUBLE\)/ }).getByRole("button", { name: "Health check" }).click();
   await page.getByText(/healthy/i).first().waitFor();
   check("health check runs the adapter and records the result", true);
   await shot("B-providers");
@@ -364,6 +364,152 @@ const check = (name, cond, detail = "") => {
   check("...and delivered/open/click rates are NOT invented", !/delivered %|open rate|click rate/i.test(await ca.innerText()));
   await shot("D-campaign-analytics");
   await page.keyboard.press("Escape");
+
+  // ---------------------------------------------------------------- Scenario E: WhatsApp template mapping
+  await page.goto(BASE);
+  await tab("Templates");
+  await page.getByRole("button", { name: "New template" }).click();
+  let nd = dialog();
+  await nd.getByRole("combobox").click();
+  await page.getByRole("option", { name: "WhatsApp" }).click();
+  await nd.getByLabel("Name", { exact: true }).fill("WA claim invite");
+  await nd.getByLabel("Body").fill("Hi {{first_name}}, claim your profile — {{company}}");
+  await nd.getByLabel("Meta template name").fill("Bad Name");
+  check("an invalid Meta template name is explained and blocks Create", (await nd.innerText()).includes("lowercase letters, digits and underscores") && (await nd.getByRole("button", { name: "Create template" }).isDisabled()));
+  check("the form says approval happens in Meta and the mapping is UNVERIFIED", /UNVERIFIED/.test(await nd.innerText()));
+  await nd.getByLabel("Meta template name").fill("claim_invite");
+  await nd.getByLabel(/^Variables, in order/).fill("first_name, company");
+  await shot("E-template-mapping-form");
+  await nd.getByRole("button", { name: "Create template" }).click();
+  await page.getByRole("cell", { name: "WA claim invite", exact: true }).waitFor();
+  let waRow = await page.getByRole("row", { name: /WA claim invite/ }).innerText();
+  check("mapped template listed with its Meta name and UNVERIFIED status", waRow.includes("claim_invite") && waRow.includes("UNVERIFIED"), waRow.replace(/\s+/g, " "));
+
+  await page.getByRole("button", { name: "New template" }).click();
+  nd = dialog();
+  await nd.getByRole("combobox").click();
+  await page.getByRole("option", { name: "WhatsApp" }).click();
+  await nd.getByLabel("Name", { exact: true }).fill("WA free text");
+  await nd.getByLabel("Body").fill("Hello there");
+  await nd.getByRole("button", { name: "Create template" }).click();
+  await page.getByRole("cell", { name: "WA free text", exact: true }).waitFor();
+  check("an unmapped WhatsApp template is labelled free text only", (await page.getByRole("row", { name: /WA free text/ }).innerText()).includes("free text only"));
+
+  await tab("Campaigns");
+  await page.getByRole("button", { name: "New campaign" }).click();
+  const wz = dialog();
+  await wz.getByRole("combobox", { name: "Channel" }).click();
+  await page.getByRole("option", { name: "WhatsApp" }).click();
+  await wz.getByRole("combobox", { name: "Template" }).click();
+  // force: the Select's own SelectItem is correctly positioned and hit-tested (verified manually); Playwright's
+  // actionability-stability poll intermittently never settles here against leftover Radix portal nodes from the
+  // many prior Select interactions earlier in this single long-lived page session.
+  await page.getByRole("option", { name: "WA free text" }).click({ force: true });
+  await wz.getByText("Select all shown").waitFor();
+  check("wizard refuses a WhatsApp template that is not mapped to a Meta template", (await wz.innerText()).includes("not mapped to a Meta-approved template") && (await wz.getByRole("button", { name: /^Continue/ }).isDisabled()));
+  await shot("E-wizard-unmapped-blocked");
+  await wz.getByRole("combobox", { name: "Template" }).click();
+  await page.getByRole("option", { name: "WA claim invite" }).click({ force: true });
+  check("a mapped template shows the UNVERIFIED notice and proceeds", (await wz.innerText()).includes("UNVERIFIED") && !(await wz.innerText()).includes("not mapped to a Meta-approved template"));
+  await wz.getByText("Select all shown").click();
+  await wz.getByRole("button", { name: /Continue with 4 lead/ }).click();
+  await wz.getByLabel("Campaign name").fill("WA push");
+  await wz.getByRole("checkbox").click();
+  await wz.getByRole("button", { name: "Create draft campaign" }).click();
+  await wz.getByText("Campaign created").waitFor();
+  await wz.getByRole("button", { name: "Open campaign" }).click();
+
+  const wd = dialog();
+  await wd.getByText("3. Send test").waitFor();
+  await wd.getByLabel("Test phone number (+91…)").fill("+919999999999");
+  await wd.getByRole("button", { name: "Send test message" }).click();
+  await wd.getByText("Test message queued").waitFor();
+  console.log("tick:", await tick());
+  await wd.getByRole("button", { name: "Refresh" }).click();
+  await wd.getByText("Test to +919999999999 was sent").waitFor({ timeout: 8000 });
+  let sends = JSON.parse(await get("/__sends"));
+  check(
+    "the provider received the MAPPED template with ordered parameters for the test message",
+    sends.length === 1 && sends[0].template && sends[0].template.name === "claim_invite" && JSON.stringify(sends[0].template.parameters) === JSON.stringify(["Test", "Test Company"]),
+    JSON.stringify(sends[0]),
+  );
+  await page.keyboard.press("Escape");
+  await tab("Templates");
+  waRow = await page.getByRole("row", { name: /WA claim invite/ }).innerText();
+  check("only AFTER a real accepted send does the template read 'verified by a real send'", waRow.includes("verified by a real send") && !waRow.includes("UNVERIFIED"), waRow.replace(/\s+/g, " "));
+  await shot("E-template-verified");
+
+  await tab("Campaigns");
+  await page.getByRole("cell", { name: "WA push" }).click();
+  const wd2 = dialog();
+  await wd2.getByRole("button", { name: "Execute campaign" }).click();
+  await page.getByRole("button", { name: "Yes, send" }).click();
+  await wd2.getByText("Execution started").waitFor();
+  console.log("tick 1:", await tick());
+  console.log("tick 2:", await tick());
+  await wd2.getByRole("button", { name: "Refresh" }).click();
+  await wd2.getByText(/3 sent/).waitFor({ timeout: 8000 });
+  sends = JSON.parse(await get("/__sends"));
+  const camp = sends.slice(1);
+  const byRecipient = Object.fromEntries(camp.map((x) => [x.recipient, x.template && x.template.parameters]));
+  check("each recipient got ITS OWN ordered parameters", JSON.stringify(byRecipient["+919811100001"]) === JSON.stringify(["Kiran", "Desai Metals"]) && JSON.stringify(byRecipient["+919811100002"]) === JSON.stringify(["Leela", "Menon Packaging"]), JSON.stringify(byRecipient));
+  check("the recipient with no company was NOT sent a half-filled template", !("+919811100003" in byRecipient) && camp.length === 3, "campaign sends=" + camp.length);
+  // re-grab the dialog fresh: the stale `wd2` handle can point at a detached/pre-refresh render.
+  // The Progress summary ("1 failed") renders before the recipients table's own async fetch resolves with
+  // the per-row error_message, so wait for the actual reason text, not just the count.
+  await dialog().getByText(/variables\.company/).waitFor({ timeout: 8000 });
+  const detailText = await dialog().innerText();
+  check("...and is reported as failed with the reason", /1 failed/.test(detailText) && /variables\.company/.test(detailText), detailText.slice(0, 400).replace(/\s+/g, " "));
+  await shot("E-wa-campaign-completed");
+  await page.keyboard.press("Escape");
+
+  // ---------------------------------------------------------------- Scenario F: Industry Intelligence
+  await page.goto(BASE + "/industry");
+  await page.getByRole("heading", { name: "Industry Intelligence" }).waitFor();
+  await page.getByText("No industries yet").waitFor();
+  check("an empty organization shows an honest empty state (nothing pre-filled)", (await text()).includes("nothing is pre-filled") && (await text()).includes("No opportunities flagged"));
+  await page.getByRole("button", { name: "Industry", exact: true }).click();
+  await dialog().getByLabel("Name").fill("Steel");
+  await dialog().getByRole("button", { name: "Add industry" }).click();
+  await page.getByRole("cell", { name: /^Steel/ }).first().waitFor();
+  check("industry added through the UI", true);
+
+  await page.getByRole("button", { name: "Record signal" }).first().click();
+  const sg = dialog();
+  await sg.getByLabel("Title").fill("HR coil demand rising in Pune");
+  await sg.getByRole("combobox", { name: "Source" }).click();
+  await page.getByRole("option", { name: "Web search" }).click();
+  check("a web-search signal without a URL is blocked and the reason is shown", (await sg.innerText()).includes("A source URL is required") && (await sg.getByRole("button", { name: "Record signal" }).isDisabled()));
+  await sg.getByLabel(/^Source URL/).fill("javascript:alert(1)");
+  check("a non-http(s) URL is refused", (await sg.innerText()).includes("http:// or https://") && (await sg.getByRole("button", { name: "Record signal" }).isDisabled()));
+  await sg.getByLabel(/^Source URL/).fill("https://news.example.com/hr-coil");
+  await sg.getByRole("combobox", { name: "Industry" }).click();
+  await page.getByRole("option", { name: "Steel" }).click();
+  await sg.getByText("This suggests an RFQ worth posting").click();
+  await sg.getByLabel(/What request would you post/).fill("Post an RFQ for HR coil, Pune delivery");
+  await shot("F-signal-form");
+  await sg.getByRole("button", { name: "Record signal" }).click();
+  await page.getByText("Signal recorded.").waitFor();
+  // the toast fires on a successful POST; the signal list re-fetch that follows is a separate async step.
+  await page.getByText("HR coil demand rising in Pune").first().waitFor();
+  const idxText = await text();
+  check("the signal appears with its source, and in the opportunity list with the note", idxText.includes("HR coil demand rising in Pune") && idxText.includes("Post an RFQ for HR coil, Pune delivery") && idxText.includes("https://news.example.com/hr-coil"));
+  check("the source link is external-safe (noopener, nofollow)", (await page.locator('a[href="https://news.example.com/hr-coil"]').first().getAttribute("rel")) === "noopener noreferrer nofollow");
+  check("the summary counts what was recorded (1 signal, 1 opportunity, by source 0 / 0 / 1)", /1\s*\n?\s*Signals recorded/.test(idxText) && idxText.includes("0 / 0 / 1"));
+  check("trends are described as counts, not forecasts, and say when there is not enough data", idxText.includes("Not a forecast") && idxText.includes("not enough data"));
+  await shot("F-industry-dashboard");
+
+  await page.getByRole("button", { name: "Open Steel" }).click();
+  await dialog().getByLabel("New category name").fill("TMT Bars");
+  await dialog().getByRole("button", { name: "Add", exact: true }).click();
+  await dialog().getByText("TMT Bars").waitFor();
+  check("a category is added to the industry", true);
+  await page.keyboard.press("Escape");
+
+  await page.getByRole("button", { name: /Delete signal HR coil/ }).click();
+  await page.getByRole("button", { name: "Delete", exact: true }).click();
+  await page.getByText("No signals recorded").waitFor();
+  check("deleting a signal removes it (ADMIN)", true);
 
   // ---------------------------------------------------------------- Scenario C: provider failing -> campaign ends failed (fail closed)
   check("no uncaught page errors", consoleErrors.filter((e) => e.startsWith("PAGEERROR")).length === 0, consoleErrors.slice(0, 3).join(" | "));

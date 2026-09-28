@@ -78,6 +78,8 @@ export interface CommunicationMessage {
   subject: string | null;
   body: string | null;
   variables_used: Record<string, unknown>;
+  /** WhatsApp only: the Meta template reference actually handed to the provider for this message. */
+  provider_template?: { name: string; language: string; parameters: string[] } | null;
   status: MessageStatus;
   provider_message_id: string | null;
   error_message: string | null;
@@ -150,6 +152,8 @@ export interface ScheduleMessageInput extends SendMessageInput {
 // ---------------------------------------------------------------------------
 
 export interface OutboundMessage {
+  /** WhatsApp only: send as this approved Meta TEMPLATE (overrides the provider-level default template). */
+  template?: { name: string; language: string; parameters: string[] };
   recipient: string;
   subject?: string;
   body: string;

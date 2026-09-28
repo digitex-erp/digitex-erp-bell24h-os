@@ -35,6 +35,7 @@ import { getUnsubscribeConfig, verifyUnsubscribeToken } from "./unsubscribe.js";
 import { DashboardService } from "./DashboardService.js";
 import { ProviderAdminService, ProviderNotFoundError } from "./ProviderAdminService.js";
 import { requirePermission } from "./rbac.js";
+import { providerTemplateStatus, validateMapping } from "./whatsappTemplate.js";
 import { extractStatuses, ingestWhatsAppStatuses, verifyHandshake, verifySignature } from "./whatsappWebhook.js";
 import {
   CommunicationValidationError,
@@ -67,6 +68,11 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 }
 
 /** Maps a thrown error to a response. Only known, caller-actionable errors expose a message. */
+/** Adds `provider_template_status` (not_mapped | unverified | verified_by_send) derived from accepted-send counts. */
+function withProviderTemplateStatus<T extends { id: string; provider_template_name?: string | null }>(rows: T[], accepted: Map<string, number>) {
+  return rows.map((r) => ({ ...r, provider_template_status: providerTemplateStatus(r.provider_template_name ?? null, accepted.get(r.id) ?? 0) }));
+}
+
 function sendError(res: Response, err: unknown, requestId: string | undefined, label: string): void {
   if (err instanceof CommunicationValidationError) {
     res.status(400).json({ error: "validation_failed", detail: err.message, requestId });
@@ -231,7 +237,19 @@ export function registerCommunicationRoutes(app: Express, deps: CommunicationRou
             `SELECT * FROM public.communication_templates WHERE organization_id = $1 ORDER BY created_at DESC`,
             [auth!.organizationId],
           );
-      res.json({ templates: result.rows });
+      // The mapping status is DERIVED from the message log: "verified_by_send" only after a provider accepted a real
+      // message that used the template. An operator cannot mark a template verified.
+      const mapped = result.rows.filter((r: { provider_template_name?: string | null }) => r.provider_template_name).map((r: { id: string }) => r.id);
+      const accepted = new Map<string, number>();
+      if (mapped.length > 0) {
+        const counts = await getPool().query(
+          `SELECT template_id, COUNT(*)::int AS n FROM public.communication_messages
+            WHERE organization_id = $1 AND template_id = ANY($2::uuid[]) AND status IN ('sent','delivered') GROUP BY 1`,
+          [auth!.organizationId, mapped],
+        );
+        for (const c of counts.rows as { template_id: string; n: number }[]) accepted.set(c.template_id, c.n);
+      }
+      res.json({ templates: withProviderTemplateStatus(result.rows, accepted) });
     } catch (err) {
       sendError(res, err, requestId, "templates list");
     }
@@ -253,12 +271,20 @@ export function registerCommunicationRoutes(app: Express, deps: CommunicationRou
         throw new CommunicationValidationError("variables", "must be an array of variable names ([A-Za-z0-9_])");
       }
 
-      const result = await getPool().query(
-        `INSERT INTO public.communication_templates (organization_id, name, channel_type, subject, body, variables, created_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
-        [auth!.organizationId, b.name, channelType, subject, templateBody, JSON.stringify(variables), auth!.userId],
-      );
-      res.status(201).json({ success: true, template: result.rows[0] });
+      const mapping = validateMapping(b, channelType);
+      const result = mapping.name
+        ? await getPool().query(
+            `INSERT INTO public.communication_templates (organization_id, name, channel_type, subject, body, variables, created_by,
+                                                          provider_template_name, provider_template_language, provider_template_variables)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+            [auth!.organizationId, b.name, channelType, subject, templateBody, JSON.stringify(variables), auth!.userId, mapping.name, mapping.language, JSON.stringify(mapping.variables)],
+          )
+        : await getPool().query(
+            `INSERT INTO public.communication_templates (organization_id, name, channel_type, subject, body, variables, created_by)
+             VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+            [auth!.organizationId, b.name, channelType, subject, templateBody, JSON.stringify(variables), auth!.userId],
+          );
+      res.status(201).json({ success: true, template: withProviderTemplateStatus(result.rows, new Map())[0] });
     } catch (err) {
       sendError(res, err, requestId, "template create");
     }

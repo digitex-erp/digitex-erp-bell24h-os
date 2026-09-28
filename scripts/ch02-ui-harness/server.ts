@@ -7,7 +7,8 @@
 import express from "express";
 import path from "node:path";
 import type { RequestHandler } from "express";
-import { createTestDb, seedOrg, seedUser } from "../../server/communication/__tests__/helpers/testDb.js";
+import { applyMigration, createTestDb, seedOrg, seedUser } from "../../server/communication/__tests__/helpers/testDb.js";
+import { registerIndustryRoutes } from "../../server/industry/routes.js";
 import { seedContact } from "../../server/communication/__tests__/helpers/httpHarness.js";
 import { registerCommunicationRoutes } from "../../server/communication/routes.js";
 import { CommunicationJobHandler } from "../../server/workers/handlers/CommunicationJobHandler.js";
@@ -22,6 +23,9 @@ process.env.COMM_UNSUBSCRIBE_SECRET = UNSUB_SECRET;
 process.env.COMM_PUBLIC_BASE_URL = `http://127.0.0.1:${PORT}`;
 const lastUnsubscribeUrl = new Map<string, string>();
 const t = await createTestDb();
+// Industry Intelligence needs its own two migrations (the Hub's are applied by createTestDb).
+await applyMigration(t.db, "add_industry_intelligence.sql");
+await applyMigration(t.db, "add_industry_signals.sql");
 const org = await seedOrg(t.db, "Acme Demo Org");
 const admin = await seedUser(t.db, org, ["ADMIN"]);
 const registry = (ProviderFactory as unknown as { registry: Record<string, ProviderAdapter> }).registry;
@@ -40,6 +44,21 @@ const fake: ProviderAdapter = {
 };
 registry.resend = fake;
 
+// WhatsApp TEST DOUBLE: records exactly what the worker hands to the Meta adapter (template name + ordered parameters).
+const metaSends: { recipient: string; template: unknown; body: string }[] = [];
+const fakeMeta: ProviderAdapter = {
+  provider: "meta_whatsapp",
+  channelType: "whatsapp",
+  send: async (msg) => {
+    metaSends.push({ recipient: msg.recipient, template: msg.template ?? null, body: msg.body });
+    return mode === "fail" ? { success: false, errorMessage: "Meta API 400 (code 132001): Template name does not exist (test double)" } : { success: true, providerMessageId: `wamid.double-${metaSends.length}` };
+  },
+  status: async () => ({ status: "sent" }),
+  validate: async () => ({ valid: true }),
+  healthCheck: async () => ({ healthy: mode !== "fail", checkedAt: new Date().toISOString() }),
+};
+registry.meta_whatsapp = fakeMeta;
+
 // data an operator would already have
 const good = [
   ["Asha", "Rao", "asha@acme-buyers.example", "Acme Buyers"],
@@ -51,6 +70,10 @@ const good = [
 for (const [f, l, e, c] of good) await seedContact(t.db, org, { first: f, last: l, email: e, company: c });
 await seedContact(t.db, org, { first: "Broken", last: "Address", email: "not-an-email", company: "Bad Data Ltd" });
 await seedContact(t.db, org, { first: "Phone", last: "Only", phone: "+919876543210", company: "Phone Co" });
+// WhatsApp-capable leads (phone only): two with a company, one without (so the mapped template fails for that recipient alone).
+await seedContact(t.db, org, { first: "Kiran", last: "Desai", phone: "+919811100001", company: "Desai Metals" });
+await seedContact(t.db, org, { first: "Leela", last: "Menon", phone: "+919811100002", company: "Menon Packaging" });
+await seedContact(t.db, org, { first: "Noor", last: "Khan", phone: "+919811100003" });
 
 const authenticate: RequestHandler = (req, _res, next) => {
   (req as AuthedRequest).auth = { userId: admin, organizationId: org, token: "harness" };
@@ -60,6 +83,7 @@ const authenticate: RequestHandler = (req, _res, next) => {
 
 const app = express();
 app.use(express.json({ verify: (req, _res, buf) => ((req as { rawBody?: Buffer }).rawBody = buf) }));
+registerIndustryRoutes(app, { getPool: () => t.pool, authenticate, limits: { write: 1000 } });
 registerCommunicationRoutes(app, { getPool: () => t.pool, authenticate, limits: { send: 1000, retry: 1000, write: 1000, campaign: 1000, health: 1000 } });
 
 const handler = new CommunicationJobHandler(t.pool);
@@ -70,6 +94,12 @@ app.get("/__provider", async (req, res) => {
   await t.db.exec(`DELETE FROM public.communication_deliveries; UPDATE public.communication_messages SET provider_id = NULL; DELETE FROM public.communication_providers;`);
   if (m !== "none") {
     process.env.COMM_RESEND_HARNESS = "harness-not-a-real-key";
+    process.env.COMM_META_HARNESS = "harness-not-a-real-token";
+    await t.db.query(
+      `INSERT INTO public.communication_providers (organization_id, name, provider, channel_type, credentials_secret_ref, priority, settings)
+       VALUES ($1,'WhatsApp (TEST DOUBLE)','meta_whatsapp','whatsapp','COMM_META_HARNESS',0,'{"phoneNumberId":"1234567890"}')`,
+      [org],
+    );
     await t.db.query(
       `INSERT INTO public.communication_providers (organization_id, name, provider, channel_type, credentials_secret_ref, priority, settings)
        VALUES ($1,'Resend (TEST DOUBLE)','resend','email','COMM_RESEND_HARNESS',0,'{"fromAddress":"no-reply@example.com"}')`,
@@ -78,6 +108,9 @@ app.get("/__provider", async (req, res) => {
   }
   res.send(`provider mode = ${m}`);
 });
+// What the WhatsApp double received (template + ordered parameters) — for the e2e to assert on.
+app.get("/__sends", (_req, res) => res.json(metaSends));
+
 // Switches the server's unsubscribe configuration off/on, to show the fail-closed gate.
 app.get("/__unsub", (req, res) => {
   if (req.query.mode === "off") {

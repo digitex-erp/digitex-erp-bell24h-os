@@ -10,7 +10,7 @@ import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { communicationsApi, errorText } from "@/lib/communicationsApi";
-import { templateHasUnsubscribe } from "@/lib/communicationsFlow";
+import { mappingStatusLabel, parseVariableList, templateHasUnsubscribe, templateMappingProblem } from "@/lib/communicationsFlow";
 import type { CommChannel, CommTemplate } from "@/types/communications";
 import { EmptyState, ErrorNote, formatDate, LoadingRow, ToneBadge } from "./shared";
 
@@ -60,6 +60,7 @@ export function TemplatesTab() {
                 <TableHead>Name</TableHead>
                 <TableHead>Channel</TableHead>
                 <TableHead>Subject</TableHead>
+                <TableHead>Meta template</TableHead>
                 <TableHead>State</TableHead>
                 <TableHead>Created</TableHead>
                 <TableHead className="w-20" />
@@ -71,6 +72,16 @@ export function TemplatesTab() {
                   <TableCell className="font-medium">{t.name}</TableCell>
                   <TableCell>{t.channel_type}</TableCell>
                   <TableCell className="max-w-xs truncate text-muted-foreground">{t.subject ?? "—"}</TableCell>
+                  <TableCell>
+                    {t.channel_type === "whatsapp" ? (
+                      <div className="space-y-1">
+                        {t.provider_template_name && <div className="font-mono text-xs">{t.provider_template_name}</div>}
+                        <ToneBadge tone={mappingStatusLabel(t.provider_template_status).tone}>{mappingStatusLabel(t.provider_template_status).text}</ToneBadge>
+                      </div>
+                    ) : (
+                      "—"
+                    )}
+                  </TableCell>
                   <TableCell>
                     <ToneBadge tone={t.is_active ? "success" : "neutral"}>{t.is_active ? "active" : "inactive"}</ToneBadge>
                   </TableCell>
@@ -123,13 +134,21 @@ function NewTemplateDialog({ open, onOpenChange, onCreated }: { open: boolean; o
   const [channel, setChannel] = useState<CommChannel>("email");
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
+  const [metaName, setMetaName] = useState("");
+  const [metaLang, setMetaLang] = useState("en");
+  const [metaVars, setMetaVars] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const mappingVars = parseVariableList(metaVars);
+  const mappingProblem = channel === "whatsapp" ? templateMappingProblem(metaName, metaLang, mappingVars) : null;
 
   const reset = () => {
     setName("");
     setSubject("");
     setBody("");
+    setMetaName("");
+    setMetaLang("en");
+    setMetaVars("");
     setError(null);
   };
 
@@ -137,7 +156,13 @@ function NewTemplateDialog({ open, onOpenChange, onCreated }: { open: boolean; o
     setBusy(true);
     setError(null);
     try {
-      await communicationsApi.createTemplate({ name, channelType: channel, subject: channel === "email" ? subject || undefined : undefined, body });
+      await communicationsApi.createTemplate({
+        name,
+        channelType: channel,
+        subject: channel === "email" ? subject || undefined : undefined,
+        body,
+        ...(channel === "whatsapp" && metaName.trim() ? { providerTemplateName: metaName.trim(), providerTemplateLanguage: metaLang.trim() || "en", providerTemplateVariables: mappingVars } : {}),
+      });
       reset();
       onCreated();
     } catch (e) {
@@ -186,13 +211,16 @@ function NewTemplateDialog({ open, onOpenChange, onCreated }: { open: boolean; o
             <p className="text-xs text-muted-foreground">Email bodies are sent as HTML. Line breaks are rejected in subjects.</p>
             <UnsubscribeHint channel={channel} body={body} />
           </div>
+          {channel === "whatsapp" && (
+            <MetaMappingFields name={metaName} language={metaLang} variables={metaVars} problem={mappingProblem} onName={setMetaName} onLanguage={setMetaLang} onVariables={setMetaVars} idPrefix="new" />
+          )}
           <ErrorNote message={error} />
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
             Cancel
           </Button>
-          <Button onClick={submit} disabled={busy || name.trim() === "" || body.trim() === ""}>
+          <Button onClick={submit} disabled={busy || name.trim() === "" || body.trim() === "" || mappingProblem !== null}>
             {busy ? "Saving…" : "Create template"}
           </Button>
         </DialogFooter>
@@ -211,8 +239,14 @@ function EditTemplateDialog({ template, onClose, onSaved }: { template: CommTemp
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
   const [active, setActive] = useState(true);
+  const [metaName, setMetaName] = useState("");
+  const [metaLang, setMetaLang] = useState("en");
+  const [metaVars, setMetaVars] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const isWhatsapp = template?.channel_type === "whatsapp";
+  const mappingVars = parseVariableList(metaVars);
+  const mappingProblem = isWhatsapp ? templateMappingProblem(metaName, metaLang, mappingVars) : null;
 
   useEffect(() => {
     if (!template) return;
@@ -220,17 +254,30 @@ function EditTemplateDialog({ template, onClose, onSaved }: { template: CommTemp
     setSubject(template.subject ?? "");
     setBody(template.body);
     setActive(template.is_active);
+    setMetaName(template.provider_template_name ?? "");
+    setMetaLang(template.provider_template_language ?? "en");
+    setMetaVars((template.provider_template_variables ?? []).join(", "));
     setError(null);
   }, [template]);
 
   async function submit() {
     if (!template) return;
     // Send only what changed, so an untouched field can never trip the in-use lock.
-    const patch: { name?: string; subject?: string; body?: string; isActive?: boolean } = {};
+    const patch: { name?: string; subject?: string; body?: string; isActive?: boolean; providerTemplateName?: string; providerTemplateLanguage?: string; providerTemplateVariables?: string[] } = {};
     if (name !== template.name) patch.name = name;
     if (template.channel_type === "email" && subject !== (template.subject ?? "")) patch.subject = subject;
     if (body !== template.body) patch.body = body;
     if (active !== template.is_active) patch.isActive = active;
+    if (isWhatsapp) {
+      const cur = { name: template.provider_template_name ?? "", lang: template.provider_template_language ?? "en", vars: (template.provider_template_variables ?? []).join(",") };
+      if (metaName.trim() !== cur.name || (metaName.trim() && metaLang.trim() !== cur.lang) || mappingVars.join(",") !== cur.vars) {
+        patch.providerTemplateName = metaName.trim();
+        if (metaName.trim()) {
+          patch.providerTemplateLanguage = metaLang.trim() || "en";
+          patch.providerTemplateVariables = mappingVars;
+        }
+      }
+    }
     if (Object.keys(patch).length === 0) {
       onClose();
       return;
@@ -272,6 +319,9 @@ function EditTemplateDialog({ template, onClose, onSaved }: { template: CommTemp
             <Textarea id="edit-body" rows={6} value={body} onChange={(e) => setBody(e.target.value)} />
             <UnsubscribeHint channel={template?.channel_type ?? ""} body={body} />
           </div>
+          {isWhatsapp && (
+            <MetaMappingFields name={metaName} language={metaLang} variables={metaVars} problem={mappingProblem} onName={setMetaName} onLanguage={setMetaLang} onVariables={setMetaVars} idPrefix="edit" />
+          )}
           <div className="flex items-center gap-3">
             <Switch id="edit-active" checked={active} onCheckedChange={setActive} />
             <Label htmlFor="edit-active">{active ? "Active (can be used in campaigns)" : "Inactive"}</Label>
@@ -282,11 +332,58 @@ function EditTemplateDialog({ template, onClose, onSaved }: { template: CommTemp
           <Button variant="outline" onClick={onClose} disabled={busy}>
             Cancel
           </Button>
-          <Button onClick={() => void submit()} disabled={busy || name.trim() === "" || body.trim() === ""}>
+          <Button onClick={() => void submit()} disabled={busy || name.trim() === "" || body.trim() === "" || mappingProblem !== null}>
             {busy ? "Saving…" : "Save changes"}
           </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** The Meta-approved-template mapping for a WhatsApp template. Approval is done in Meta; this form never claims it. */
+function MetaMappingFields({
+  name,
+  language,
+  variables,
+  problem,
+  onName,
+  onLanguage,
+  onVariables,
+  idPrefix,
+}: {
+  name: string;
+  language: string;
+  variables: string;
+  problem: string | null;
+  onName: (v: string) => void;
+  onLanguage: (v: string) => void;
+  onVariables: (v: string) => void;
+  idPrefix: string;
+}) {
+  return (
+    <fieldset className="space-y-3 rounded-md border p-3">
+      <legend className="px-1 text-sm font-medium">Meta-approved template (needed for campaigns)</legend>
+      <p className="text-xs text-muted-foreground">
+        Outside Meta's 24-hour window WhatsApp only delivers an <strong>approved template</strong>. Enter the name exactly as approved in Meta. This app cannot check the approval:
+        the mapping stays <strong>UNVERIFIED</strong> until a real send succeeds.
+      </p>
+      <div className="grid gap-3 sm:grid-cols-3">
+        <div className="space-y-1 sm:col-span-2">
+          <Label htmlFor={`${idPrefix}-meta-name`}>Meta template name</Label>
+          <Input id={`${idPrefix}-meta-name`} value={name} onChange={(e) => onName(e.target.value)} placeholder="claim_invite" maxLength={512} />
+        </div>
+        <div className="space-y-1">
+          <Label htmlFor={`${idPrefix}-meta-lang`}>Language</Label>
+          <Input id={`${idPrefix}-meta-lang`} value={language} onChange={(e) => onLanguage(e.target.value)} placeholder="en" maxLength={10} />
+        </div>
+      </div>
+      <div className="space-y-1">
+        <Label htmlFor={`${idPrefix}-meta-vars`}>Variables, in order ({"{{1}}"}, {"{{2}}"} …)</Label>
+        <Input id={`${idPrefix}-meta-vars`} value={variables} onChange={(e) => onVariables(e.target.value)} placeholder="first_name, company" />
+        <p className="text-xs text-muted-foreground">Campaign recipients supply first_name, last_name and company. A recipient with an empty value is skipped and reported, never sent a half-filled template.</p>
+      </div>
+      {problem && <p role="alert" className="text-xs text-red-600 dark:text-red-400">{problem}</p>}
+    </fieldset>
   );
 }

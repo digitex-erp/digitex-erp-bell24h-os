@@ -79,6 +79,11 @@ DECLARE
     tables TEXT[] := ARRAY['industries', 'industry_categories', 'industry_subcategories', 'industry_products', 'buyer_personas', 'supplier_personas'];
 BEGIN
     FOREACH t IN ARRAY tables LOOP
+        -- Re-runnable: drop first (Phase 2 fix; the original CREATE POLICY failed on a second run).
+        EXECUTE format('DROP POLICY IF EXISTS "Org isolation select" ON public.%I;', t);
+        EXECUTE format('DROP POLICY IF EXISTS "Org isolation insert" ON public.%I;', t);
+        EXECUTE format('DROP POLICY IF EXISTS "Org isolation update" ON public.%I;', t);
+        EXECUTE format('DROP POLICY IF EXISTS "Org isolation delete" ON public.%I;', t);
         EXECUTE format('CREATE POLICY "Org isolation select" ON public.%I FOR SELECT USING (organization_id = public.get_current_org_id());', t);
         EXECUTE format('CREATE POLICY "Org isolation insert" ON public.%I FOR INSERT WITH CHECK (organization_id = public.get_current_org_id());', t);
         EXECUTE format('CREATE POLICY "Org isolation update" ON public.%I FOR UPDATE USING (organization_id = public.get_current_org_id());', t);

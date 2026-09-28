@@ -17,6 +17,13 @@ export interface CommTemplate {
   variables: string[];
   is_active: boolean;
   created_at: string;
+  /** WhatsApp only: the Meta-approved template this maps to. Approval happens in Meta and is NOT checked here. */
+  provider_template_name?: string | null;
+  provider_template_language?: string;
+  /** Ordered: entry 1 fills Meta's {{1}}, entry 2 fills {{2}} … */
+  provider_template_variables?: string[];
+  /** Derived from the message log: verified_by_send only after a provider accepted a real message that used it. */
+  provider_template_status?: "not_mapped" | "unverified" | "verified_by_send";
 }
 
 export interface CommLead {

@@ -36,6 +36,7 @@ import type {
   ResolvedProviderConfig,
 } from "../types.js";
 import { CommunicationValidationError, validatePhoneNumber } from "../validation.js";
+import { MAX_TEMPLATE_PARAMS, META_LANGUAGE_RE, META_TEMPLATE_NAME_RE } from "../whatsappTemplate.js";
 
 const DEFAULT_API_VERSION = "v21.0";
 const TIMEOUT_MS = 10_000;
@@ -92,20 +93,29 @@ export class MetaWhatsAppCloudProvider implements ProviderAdapter {
     }
     if (!config.secretValue) return { success: false, errorMessage: "Missing resolved WhatsApp access token." };
 
+    // A per-message template (the campaign / template mapping) overrides the provider-level default template. The
+    // legacy default sends the WHOLE rendered body as the single {{1}} parameter.
+    const tpl = message.template ?? (settings.templateName ? { name: settings.templateName, language: settings.templateLanguage, parameters: [message.body] } : undefined);
     let payload: Record<string, unknown>;
-    if (settings.templateName) {
-      if (message.body.length > MAX_TEMPLATE_PARAM_LENGTH || /[\n\r\t]| {4,}/.test(message.body)) {
+    if (tpl) {
+      if (!META_TEMPLATE_NAME_RE.test(tpl.name) || !META_LANGUAGE_RE.test(tpl.language)) {
+        return { success: false, errorMessage: "Invalid WhatsApp template reference (name or language)." };
+      }
+      if (tpl.parameters.length > MAX_TEMPLATE_PARAMS) {
+        return { success: false, errorMessage: `A WhatsApp template supports at most ${MAX_TEMPLATE_PARAMS} parameters here.` };
+      }
+      if (tpl.parameters.some((p) => p.length === 0 || p.length > MAX_TEMPLATE_PARAM_LENGTH || /[\n\r\t]| {4,}/.test(p))) {
         return {
           success: false,
-          errorMessage: `Template parameter must be at most ${MAX_TEMPLATE_PARAM_LENGTH} characters with no line breaks, tabs or 4+ consecutive spaces (Meta rule).`,
+          errorMessage: `Template parameter must be 1-${MAX_TEMPLATE_PARAM_LENGTH} characters with no line breaks, tabs or 4+ consecutive spaces (Meta rule).`,
         };
       }
       payload = {
         type: "template",
         template: {
-          name: settings.templateName,
-          language: { code: settings.templateLanguage },
-          components: [{ type: "body", parameters: [{ type: "text", text: message.body }] }],
+          name: tpl.name,
+          language: { code: tpl.language },
+          ...(tpl.parameters.length > 0 ? { components: [{ type: "body", parameters: tpl.parameters.map((text) => ({ type: "text", text })) }] } : {}),
         },
       };
     } else {

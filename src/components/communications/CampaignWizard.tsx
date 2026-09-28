@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { addressFor, describeCriteria, leadName, templateHasUnsubscribe } from "@/lib/communicationsFlow";
+import { addressFor, describeCriteria, leadName, templateHasUnsubscribe, whatsappTemplateUsable } from "@/lib/communicationsFlow";
 import { communicationsApi, errorText } from "@/lib/communicationsApi";
 import type { CommAudienceSummary, CommChannel, CommLead, CommList, CommSegment, CommSegmentPreview, CommTemplate } from "@/types/communications";
 import { EmptyState, ErrorNote, LoadingRow, ToneBadge } from "./shared";
@@ -124,6 +124,7 @@ export function CampaignWizard({
   const allShownSelected = usable.length > 0 && usable.every((l) => selected.has(l.id));
   const template = templates.find((t) => t.id === templateId);
   const missingUnsubscribe = channel === "email" && template !== undefined && !templateHasUnsubscribe(template.body);
+  const missingMetaMapping = channel === "whatsapp" && template !== undefined && !whatsappTemplateUsable(template);
   const chosenList = lists.find((l) => l.id === listId);
   const chosenSegment = segments.find((s) => s.id === segmentId);
   const listNames = useMemo(() => Object.fromEntries(lists.map((l) => [l.id, l.name])), [lists]);
@@ -255,6 +256,19 @@ export function CampaignWizard({
               <p role="alert" className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-300">
                 This email template has no <code>{"{{unsubscribe_url}}"}</code> placeholder. Campaign emails must include an unsubscribe link, so the server will refuse
                 this campaign. Add the placeholder in the Templates tab first.
+              </p>
+            )}
+
+            {missingMetaMapping && (
+              <p role="alert" className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-300">
+                This WhatsApp template is not mapped to a Meta-approved template. Campaigns reach contacts outside Meta's 24-hour window, where only an approved template can be
+                delivered, so the server will refuse it. Add the Meta template name and its variables in the Templates tab first.
+              </p>
+            )}
+            {channel === "whatsapp" && template !== undefined && !missingMetaMapping && template.provider_template_status !== "verified_by_send" && (
+              <p className="rounded-md border border-sky-500/30 bg-sky-500/10 p-3 text-sm text-sky-700 dark:text-sky-300">
+                The Meta template <code>{template.provider_template_name}</code> is <strong>UNVERIFIED</strong>: nothing confirms Meta approved it until a real message using it has been
+                accepted. The campaign's test message is that proof — it must succeed before you can schedule or execute.
               </p>
             )}
 
@@ -395,7 +409,7 @@ export function CampaignWizard({
               <Button variant="outline" onClick={() => onOpenChange(false)}>
                 Cancel
               </Button>
-              <Button disabled={!audienceReady || !templateId || missingUnsubscribe} onClick={() => setStep(2)}>
+              <Button disabled={!audienceReady || !templateId || missingUnsubscribe || missingMetaMapping} onClick={() => setStep(2)}>
                 {source === "contacts" ? `Continue with ${selected.size} lead(s)` : "Continue"}
               </Button>
             </DialogFooter>

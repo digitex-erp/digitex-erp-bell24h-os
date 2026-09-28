@@ -147,6 +147,7 @@ export class CommunicationJobHandler {
             recipient: message.recipient,
             subject: message.subject ?? undefined,
             body: message.body || "",
+            template: message.provider_template ?? undefined,
             // Stable across worker retries of the same send; a manual retry gets a new value.
             idempotencyKey: `comm-msg:${message.id}:${message.retry_count}`,
             unsubscribeUrl,

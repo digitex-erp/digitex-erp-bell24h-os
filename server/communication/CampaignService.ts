@@ -32,6 +32,7 @@ import { CommunicationService, QuotaExceededError } from "./CommunicationService
 import { AudienceService } from "./AudienceService.js";
 import { SuppressedRecipientError } from "./SuppressionService.js";
 import { buildUnsubscribeUrl, getUnsubscribeConfig } from "./unsubscribe.js";
+import { unresolvableVariables } from "./whatsappTemplate.js";
 import type { ChannelType, CommunicationMessage } from "./types.js";
 import {
   CommunicationValidationError,
@@ -272,12 +273,32 @@ export class CampaignService {
     }
 
     const tpl = await this.pool.query(
-      `SELECT id, channel_type, body FROM public.communication_templates WHERE id = $1 AND organization_id = $2 AND is_active = true`,
+      channelType === "whatsapp"
+        ? `SELECT id, channel_type, body, provider_template_name, provider_template_variables
+             FROM public.communication_templates WHERE id = $1 AND organization_id = $2 AND is_active = true`
+        : `SELECT id, channel_type, body FROM public.communication_templates WHERE id = $1 AND organization_id = $2 AND is_active = true`,
       [templateId, organizationId],
     );
     if (tpl.rows.length === 0) throw new CommunicationValidationError("templateId", "template not found or inactive for this organization");
     if (tpl.rows[0].channel_type !== channelType) {
       throw new CommunicationValidationError("templateId", `template is for channel "${tpl.rows[0].channel_type}", not "${channelType}"`);
+    }
+
+    if (channelType === "whatsapp") {
+      // Campaigns message contacts outside Meta's 24-hour window, where only an APPROVED TEMPLATE can be delivered.
+      if (!tpl.rows[0].provider_template_name) {
+        throw new CommunicationValidationError(
+          "templateId",
+          "WhatsApp campaigns must use a template mapped to a Meta-approved template (set the Meta template name and its variables on the template first)",
+        );
+      }
+      const missing = unresolvableVariables(Array.isArray(tpl.rows[0].provider_template_variables) ? tpl.rows[0].provider_template_variables : [], variables);
+      if (missing.length > 0) {
+        throw new CommunicationValidationError(
+          "templateId",
+          `the mapped WhatsApp template needs variable(s) no recipient or campaign value can supply: ${missing.join(", ")} (recipients provide first_name, last_name, company)`,
+        );
+      }
     }
 
     if (channelType === "email" && !/\{\{\s*unsubscribe_url\s*\}\}/.test(String(tpl.rows[0].body))) {

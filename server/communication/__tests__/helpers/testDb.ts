@@ -132,6 +132,7 @@ export async function createTestDb(): Promise<TestDb> {
   await db.exec(jobQueueDdl());
   await db.exec(communicationMigrationSql());
   await db.exec(campaignsMigrationSql());
+  await db.exec(fs.readFileSync(path.join(REPO_ROOT, "add_whatsapp_template_mapping.sql"), "utf8"));
   const pool = toPool(db);
   // QueueManager is a process-wide singleton bound to its first pool; rebind it to this test DB.
   (QueueManager as unknown as { instance: QueueManager | null }).instance = null;
@@ -164,4 +165,9 @@ export async function seedUser(db: PGlite, orgId: string, roleNames: string[]): 
     await db.query(`INSERT INTO public.user_roles (user_id, role_id, organization_id) VALUES ($1, $2, $3)`, [id, roleId, orgId]);
   }
   return id;
+}
+
+/** Applies an additional REAL migration file from the repo root to a test database. */
+export async function applyMigration(db: PGlite, fileName: string): Promise<void> {
+  await db.exec(fs.readFileSync(path.join(REPO_ROOT, fileName), "utf8"));
 }

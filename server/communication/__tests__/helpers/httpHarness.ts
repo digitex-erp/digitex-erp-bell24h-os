@@ -120,3 +120,17 @@ export async function seedContact(
   );
   return r.rows[0].id;
 }
+
+/** Serves ANY route registrar on a bare Express app (JSON body + raw-body capture, auth stubbed by the caller). */
+export async function serveApp(register: (app: express.Express) => void): Promise<Harness> {
+  const app = express();
+  app.use(express.json({ verify: (req, _res, buf) => ((req as { rawBody?: Buffer }).rawBody = buf) }));
+  register(app);
+  const server: Server = await new Promise((resolve) => {
+    const s = app.listen(0, "127.0.0.1", () => resolve(s));
+  });
+  return {
+    url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+  };
+}

@@ -199,7 +199,18 @@ export function CampaignDetailDialog({
                 >
                   {busy === "test" ? "Sending…" : "Send test message"}
                 </Button>
-                <Button variant="ghost" size="icon" onClick={() => void loadDetail()} aria-label="Refresh">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => {
+                    void loadDetail();
+                    // The recipients table only auto-refreshes while polling is active (shouldPoll); once a
+                    // campaign finishes, Refresh must still pull the per-recipient error_message rows, or a
+                    // completed campaign's failure reasons stay stuck at their pre-completion snapshot.
+                    void loadRecipients(0);
+                  }}
+                  aria-label="Refresh"
+                >
                   <RefreshCw className="h-4 w-4" />
                 </Button>
               </div>

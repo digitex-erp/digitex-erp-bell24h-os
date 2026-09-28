@@ -21,7 +21,11 @@ import { requireAuth, type AuthedRequest } from "./server/middleware/requireAuth
 import { requireServiceAuth, type ServiceAuthedRequest } from "./server/middleware/requireServiceAuth.js";
 import { requireCronAuth } from "./server/middleware/requireCronAuth.js";
 import { rateLimit } from "./server/middleware/rateLimit.js";
-import { emitAuditEvent, newRequestId } from "./server/audit.js";
+import { emitAuditEvent, newRequestId, setAuditSink } from "./server/audit.js";
+import { createAuditSink } from "./server/lib/auditStore.js";
+import { registerAuditRoutes } from "./server/lib/auditRoutes.js";
+import { registerIndustryRoutes } from "./server/industry/routes.js";
+import { registerExplainabilityRoutes } from "./server/explainability/routes.js";
 import { resolveRequestId } from "./server/lib/requestContext.js";
 import { sendError } from "./server/lib/errors.js";
 import { postgrestFetch, SupabaseRestError } from "./server/lib/supabaseRest.js";
@@ -359,6 +363,17 @@ export async function createApp() {
   // requireAuth -> role check (server/communication/rbac.ts) -> rate limit -> handler,
   // with input validation, idempotency keys and per-org quotas (Sprint C0 hardening).
   registerCommunicationRoutes(app, { getPool, authenticate: requireAuth });
+
+  // Durable audit log (Phase 2). The sink is registered only when a database is configured; events always also go to
+  // stdout. If add_audit_log.sql has not been applied, GET /api/audit/status reports table_missing rather than healthy.
+  if (process.env.DATABASE_URL) setAuditSink(createAuditSink(getPool));
+  registerAuditRoutes(app, { getPool, authenticate: requireAuth });
+
+  // Industry Intelligence (Phase 2): organization-scoped register of industries and recorded market signals.
+  registerIndustryRoutes(app, { getPool, authenticate: requireAuth });
+
+  // Explainability framework (contracts only): read-only status and stored records. No explainer is registered.
+  registerExplainabilityRoutes(app, { getPool, authenticate: requireAuth });
 
   const getWorkerRegistry = () => WorkerRegistry.getInstance(getPool(), getQueueManager());
   const getWorkerSupervisor = () => WorkerSupervisor.getInstance(getPool(), getQueueManager());

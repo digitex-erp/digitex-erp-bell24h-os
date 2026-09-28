@@ -10,6 +10,7 @@
 import type pg from "pg";
 import { emitAuditEvent, newRequestId } from "../audit.js";
 import { CommunicationValidationError, validateBody, validateSubject, validateUuid } from "./validation.js";
+import { validateMapping } from "./whatsappTemplate.js";
 
 export class TemplateNotFoundError extends Error {
   constructor() {
@@ -29,11 +30,17 @@ export class TemplateService {
 
   async update(organizationId: string, actor: string, templateId: string, patch: Record<string, unknown>) {
     const id = validateUuid(templateId, "templateId");
-    const allowed = ["name", "subject", "body", "isActive"];
+    const mappingKeys = ["providerTemplateName", "providerTemplateLanguage", "providerTemplateVariables"];
+    const allowed = ["name", "subject", "body", "isActive", ...mappingKeys];
     for (const k of Object.keys(patch)) if (!allowed.includes(k)) throw new CommunicationValidationError(k, "cannot be changed here");
     if (Object.keys(patch).length === 0) throw new CommunicationValidationError("body", "provide at least one of name, subject, body, isActive");
 
-    const existing = await this.pool.query(`SELECT id FROM public.communication_templates WHERE id = $1 AND organization_id = $2`, [id, organizationId]);
+    const touchesMapping = mappingKeys.some((k) => patch[k] !== undefined);
+    const existing = await this.pool.query(
+      `SELECT id, channel_type${touchesMapping ? ", provider_template_name, provider_template_language, provider_template_variables" : ""}
+         FROM public.communication_templates WHERE id = $1 AND organization_id = $2`,
+      [id, organizationId],
+    );
     if (existing.rows.length === 0) throw new TemplateNotFoundError();
 
     const sets: string[] = [];
@@ -55,6 +62,25 @@ export class TemplateService {
     if (patch.body !== undefined) {
       set("body", validateBody(patch.body));
       contentChange = true;
+    }
+    if (touchesMapping) {
+      const cur = existing.rows[0];
+      // Patch fields are applied on top of the stored mapping, then the WHOLE mapping is validated.
+      const clearsName = patch.providerTemplateName === "" || patch.providerTemplateName === null;
+      const merged = validateMapping(
+        {
+          providerTemplateName: patch.providerTemplateName !== undefined ? patch.providerTemplateName : cur.provider_template_name,
+          providerTemplateLanguage: patch.providerTemplateLanguage !== undefined ? patch.providerTemplateLanguage : cur.provider_template_language,
+          // Clearing the name unmaps the template, which also clears its variables (unless the caller sends new ones).
+          providerTemplateVariables:
+            patch.providerTemplateVariables !== undefined ? patch.providerTemplateVariables : clearsName ? [] : cur.provider_template_variables,
+        },
+        cur.channel_type,
+      );
+      set("provider_template_name", merged.name);
+      set("provider_template_language", merged.language);
+      set("provider_template_variables", JSON.stringify(merged.variables));
+      contentChange = true; // what is sent changes: locked while an unfinished campaign uses this template
     }
     if (patch.isActive !== undefined) {
       if (typeof patch.isActive !== "boolean") throw new CommunicationValidationError("isActive", "must be true or false");

@@ -274,3 +274,31 @@ export function deliveryTrackingNote(t: "provider_acceptance_only" | "webhook"):
 }
 
 export const percentText = (v: number | null): string => (v === null ? "n/a" : `${v}%`);
+
+// ---- WhatsApp template mapping ------------------------------------------------------------------------------------
+
+/** "first_name, company" / "first_name company" -> ["first_name", "company"] (order kept, duplicates removed). */
+export function parseVariableList(text: string): string[] {
+  return Array.from(new Set(text.split(/[\s,;]+/).map((v) => v.trim()).filter(Boolean)));
+}
+
+/** Mirrors the server rule so the form can explain a refusal before it is sent (the server still validates). */
+export function templateMappingProblem(name: string, language: string, variables: string[]): string | null {
+  if (name.trim() === "") return variables.length > 0 ? "Enter the Meta template name, or clear the variables." : null;
+  if (!/^[a-z0-9_]{1,512}$/.test(name.trim())) return "The Meta template name is lowercase letters, digits and underscores only.";
+  if (language.trim() !== "" && !/^[a-z]{2,3}(_[A-Za-z]{2,4})?$/.test(language.trim())) return "Language looks like en, en_US or hi.";
+  if (variables.length > 10) return "At most 10 variables are supported.";
+  if (variables.some((v) => !/^\w{1,50}$/.test(v))) return "Variable names use letters, digits and underscores.";
+  return null;
+}
+
+/** A WhatsApp campaign can only be created from a template that maps to a Meta template. */
+export function whatsappTemplateUsable(t: { channel_type: string; provider_template_name?: string | null }): boolean {
+  return t.channel_type !== "whatsapp" || !!t.provider_template_name;
+}
+
+export function mappingStatusLabel(status: string | undefined): { text: string; tone: Tone } {
+  if (status === "verified_by_send") return { text: "verified by a real send", tone: "success" };
+  if (status === "unverified") return { text: "UNVERIFIED", tone: "warning" };
+  return { text: "free text only", tone: "neutral" };
+}

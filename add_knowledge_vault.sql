@@ -74,15 +74,24 @@ ALTER TABLE timeline_milestones ENABLE ROW LEVEL SECURITY;
 ALTER TABLE phases ENABLE ROW LEVEL SECURITY;
 ALTER TABLE decision_records ENABLE ROW LEVEL SECURITY;
 
--- Allow public access for "Single Founder Mode" if needed, or restricted to auth user
+-- Allow public access for "Single Founder Mode" if needed, or restricted to auth user.
+-- RE-RUNNABLE: each policy is dropped first, and the seed rows below are guarded. supabase_schema.sql already creates
+-- these same tables and policies, so running this file after it used to fail at the first CREATE POLICY and abort the
+-- rest of the script. To limit reads to signed-in users only, apply add_knowledge_vault_hardening.sql afterwards.
+DROP POLICY IF EXISTS "Public Read Access" ON vault_documents;
 CREATE POLICY "Public Read Access" ON vault_documents FOR SELECT USING (true);
+DROP POLICY IF EXISTS "Public Read Access" ON rd_library;
 CREATE POLICY "Public Read Access" ON rd_library FOR SELECT USING (true);
+DROP POLICY IF EXISTS "Public Read Access" ON timeline_milestones;
 CREATE POLICY "Public Read Access" ON timeline_milestones FOR SELECT USING (true);
+DROP POLICY IF EXISTS "Public Read Access" ON phases;
 CREATE POLICY "Public Read Access" ON phases FOR SELECT USING (true);
+DROP POLICY IF EXISTS "Public Read Access" ON decision_records;
 CREATE POLICY "Public Read Access" ON decision_records FOR SELECT USING (true);
 
 -- Insert Initial Timeline Milestones
-INSERT INTO timeline_milestones (title, description, status, sort_order) VALUES
+INSERT INTO timeline_milestones (title, description, status, sort_order)
+SELECT * FROM (VALUES
 ('Business Idea', 'Initial concept for ICECRAFT', 'Completed', 1),
 ('Research', 'Deep market and technical R&D', 'Completed', 2),
 ('Supplier Discovery', 'Identifying high-quality suppliers', 'Completed', 3),
@@ -101,7 +110,9 @@ INSERT INTO timeline_milestones (title, description, status, sort_order) VALUES
 ('Manufacturing Plant', 'Own industrial facility', 'Future', 16),
 ('Multiple Cities', 'National footprint', 'Future', 17),
 ('International Expansion', 'Global brand presence', 'Future', 18)
-ON CONFLICT DO NOTHING;
+) AS v(title, description, status, sort_order)
+-- ON CONFLICT DO NOTHING has no effect here (no unique key), so a re-run used to duplicate every row: seed only an empty table.
+WHERE NOT EXISTS (SELECT 1 FROM timeline_milestones);
 
 -- Insert Initial Phases
 INSERT INTO phases (id, title, status, description, conditions) VALUES

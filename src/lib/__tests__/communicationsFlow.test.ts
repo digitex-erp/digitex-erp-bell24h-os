@@ -18,6 +18,10 @@ import {
   shouldPoll,
   statusTone,
   templateHasUnsubscribe,
+  mappingStatusLabel,
+  parseVariableList,
+  templateMappingProblem,
+  whatsappTemplateUsable,
 } from "../communicationsFlow.js";
 import type { CampaignStatus, CommCampaignDetail } from "../../types/communications.js";
 
@@ -283,5 +287,32 @@ describe("analytics wording is honest", () => {
   it("email/sms say delivery is not tracked; whatsapp says webhook", () => {
     assert.match(deliveryTrackingNote("provider_acceptance_only"), /not tracked/);
     assert.match(deliveryTrackingNote("webhook"), /webhook/);
+  });
+});
+
+describe("WhatsApp template mapping helpers", () => {
+  it("parseVariableList keeps order, splits on commas/spaces/semicolons and removes duplicates", () => {
+    assert.deepEqual(parseVariableList(" first_name, company;first_name  order_no "), ["first_name", "company", "order_no"]);
+    assert.deepEqual(parseVariableList("   "), []);
+  });
+  it("templateMappingProblem mirrors the server rules and stays quiet for a valid or empty mapping", () => {
+    assert.equal(templateMappingProblem("", "en", []), null, "unmapped is allowed");
+    assert.equal(templateMappingProblem("claim_invite", "en_US", ["first_name"]), null);
+    assert.match(templateMappingProblem("", "en", ["first_name"])!, /template name/);
+    assert.match(templateMappingProblem("Claim Invite", "en", [])!, /lowercase/);
+    assert.match(templateMappingProblem("ok", "english", [])!, /Language/);
+    assert.match(templateMappingProblem("ok", "en", Array.from({ length: 11 }, (_, i) => `v${i}`))!, /At most 10/);
+    assert.match(templateMappingProblem("ok", "en", ["a-b"])!, /Variable names/);
+  });
+  it("a WhatsApp template is usable for a campaign only when mapped; other channels are unaffected", () => {
+    assert.equal(whatsappTemplateUsable({ channel_type: "whatsapp", provider_template_name: null }), false);
+    assert.equal(whatsappTemplateUsable({ channel_type: "whatsapp", provider_template_name: "claim_invite" }), true);
+    assert.equal(whatsappTemplateUsable({ channel_type: "email" }), true);
+  });
+  it("status labels never say verified unless the log proves it", () => {
+    assert.deepEqual(mappingStatusLabel("verified_by_send"), { text: "verified by a real send", tone: "success" });
+    assert.deepEqual(mappingStatusLabel("unverified"), { text: "UNVERIFIED", tone: "warning" });
+    assert.equal(mappingStatusLabel(undefined).text, "free text only");
+    assert.equal(mappingStatusLabel("approved").tone, "neutral", "an unknown value is never shown as verified");
   });
 });
