@@ -67,7 +67,11 @@ export function requireAnyRole(getPool: () => pg.Pool, allowedRoles: readonly st
     let roles: string[];
     try {
       roles = await getUserRoleNames(getPool(), auth.userId, auth.organizationId);
-    } catch {
+    } catch (err) {
+      console.error("[rbac] role lookup failed:",
+        err instanceof Error ? err.message : String(err),
+        "code=", (err as any)?.code,
+        "user=", auth.userId, "org=", auth.organizationId);
       return deny(503, "authorization_unavailable", "Role lookup failed.");
     }
 
