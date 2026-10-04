@@ -30,6 +30,19 @@ import { WorkerSupervisor } from "./server/workers/WorkerSupervisor.js";
 import { seoRoutes } from "./server/routes/seoRoutes.js";
 import { requireAnyRole } from "./server/communication/rbac.js";
 
+// pg's ConnectionParameters merges parse(connectionString) over the explicit `ssl`
+// option passed to `new Pool()` (pg/lib/connection-parameters.js: `config =
+// Object.assign({}, config, parse(config.connectionString))`), and pg-connection-string
+// sets `ssl: {}` whenever the connection string has an sslmode param — silently
+// discarding `rejectUnauthorized: false` below and restoring Node's default strict TLS
+// verification against Supabase's self-signed chain. Stripping only sslmode here lets
+// the explicit ssl option actually take effect.
+function stripSslModeFromDatabaseUrl(databaseUrl: string): string {
+  const url = new URL(databaseUrl);
+  url.searchParams.delete("sslmode");
+  return url.toString();
+}
+
 // OS-INTEGRATION-IMPLEMENTATION-01: extracted so a Vercel serverless entry point
 // (api/index.ts) can obtain the fully-configured Express app without also calling
 // app.listen(), which has no meaning in a serverless invocation. This is a pure
@@ -294,7 +307,7 @@ export async function createApp() {
         throw new Error("DATABASE_URL is not defined in environment variables.");
       }
       pool = new Pool({
-        connectionString: process.env.DATABASE_URL,
+        connectionString: stripSslModeFromDatabaseUrl(process.env.DATABASE_URL),
         ssl: { rejectUnauthorized: false },
         max: 20,
         idleTimeoutMillis: 30000,
@@ -690,7 +703,7 @@ async function startServer() {
     if (process.env.DATABASE_URL) {
       try {
         const pool = new Pool({
-          connectionString: process.env.DATABASE_URL,
+          connectionString: stripSslModeFromDatabaseUrl(process.env.DATABASE_URL),
           ssl: { rejectUnauthorized: false },
           max: 20,
         });
