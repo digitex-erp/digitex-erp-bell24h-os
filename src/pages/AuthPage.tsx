@@ -50,7 +50,6 @@ export function AuthPage() {
           // and updateUser() would then silently mutate the wrong account.
           // Clearing local session state first guarantees that any session
           // found past this point was established by this link's own tokens.
-          await supabase.auth.signOut({ scope: 'local' }).catch(() => {});
 
           console.log('[Recovery Diagnostic] 1. signOut complete');
           const preInitSession = await supabase.auth.getSession();
