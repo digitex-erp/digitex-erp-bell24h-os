@@ -52,6 +52,14 @@ export function AuthPage() {
           // found past this point was established by this link's own tokens.
           await supabase.auth.signOut({ scope: 'local' }).catch(() => {});
 
+          console.log('[Recovery Diagnostic] 1. signOut complete');
+          const preInitSession = await supabase.auth.getSession();
+          console.log('[Recovery Diagnostic] 2. Session after signOut:', {
+            hasSession: !!preInitSession?.data?.session,
+            userId: preInitSession?.data?.session?.user?.id || 'none',
+            email: preInitSession?.data?.session?.user?.email || 'none'
+          });
+
           if (code) {
             // PKCE Flow
             const { error } = await supabase.auth.exchangeCodeForSession(code);
@@ -202,6 +210,13 @@ export function AuthPage() {
         if (error) throw error;
         setSuccess("Password reset email sent.");
       } else if (mode === "update-password") {
+        const recoverySession = await supabase.auth.getSession();
+        console.log('[Recovery Diagnostic] 3. Session before updateUser:', {
+          hasSession: !!recoverySession?.data?.session,
+          userId: recoverySession?.data?.session?.user?.id || 'none',
+          type: recoverySession?.data?.session?.user?.user_metadata?.recovery_type || 'unknown'
+        });
+
         // DIAGNOSTIC CHECKPOINT: getUser() makes a fresh round-trip to
         // Supabase's /auth/v1/user endpoint (unlike getSession(), which can
         // return cached local state) — this confirms, right before the
