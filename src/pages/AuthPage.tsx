@@ -5,7 +5,7 @@ import { Label } from "@/components/ui/label";
 import { Command, AlertCircle, Loader2 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useLocation, useNavigate, Link, Navigate } from "react-router-dom";
-import { supabase, SUPABASE_CONFIGURED, supabaseProjectId } from "@/lib/supabase";
+import { supabase, SUPABASE_CONFIGURED, supabaseProjectId, isInitialUrlPasswordRecovery } from "@/lib/supabase";
 import { useAuthStore } from "@/store/useAuthStore";
 
 export function AuthPage() {
@@ -107,7 +107,7 @@ export function AuthPage() {
     // Check if there are ANY recovery tokens in the URL before showing the hard error
     const params = new URLSearchParams(location.search);
     const hash = new URLSearchParams(location.hash.substring(1));
-    const hasRecoveryToken = params.get('type') === 'recovery' || hash.get('type') === 'recovery' || params.has('code');
+    const hasRecoveryToken = isInitialUrlPasswordRecovery || params.get('type') === 'recovery' || hash.get('type') === 'recovery' || params.has('code');
 
     if (!hasRecoveryToken) {
       return (

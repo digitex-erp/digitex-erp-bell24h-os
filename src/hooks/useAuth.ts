@@ -1,24 +1,8 @@
 import { useAuthStore, AUTH_BYPASS } from '@/store/useAuthStore';
-import { supabase } from '@/lib/supabase';
+import { supabase, isInitialUrlPasswordRecovery } from '@/lib/supabase';
 import { AuthService } from '@/modules/auth/AuthService';
 import { useEffect } from 'react';
 import type { User } from '@/store/useAuthStore';
-
-// Mirrors AuthPage.tsx's own recovery-link detection (type=recovery / code
-// param on /auth/update-password). Needed here too because a GoTrueClient
-// listener registered from a React effect runs after the client's own
-// detectSessionInUrl handling already ran — it sees an INITIAL_SESSION event
-// with the recovery session already established, not a PASSWORD_RECOVERY
-// event (see @supabase/auth-js GoTrueClient's _emitInitialSession). Checking
-// the URL directly makes the recovery check correct regardless of that
-// event-listener-registration race.
-function isPasswordRecoveryUrl(): boolean {
-  if (typeof window === 'undefined') return false;
-  if (!window.location.pathname.includes('update-password')) return false;
-  const params = new URLSearchParams(window.location.search);
-  const hash = new URLSearchParams(window.location.hash.substring(1));
-  return params.get('type') === 'recovery' || hash.get('type') === 'recovery' || params.has('code');
-}
 
 export function useAuth() {
   const { user, isAuthenticated, isLoading, login, logout, setLoading, setPasswordRecovery } = useAuthStore();
@@ -44,7 +28,7 @@ export function useAuth() {
         // A password-recovery session must not establish a normal application
         // login — AuthPage.tsx owns this session for the update-password flow
         // only (see App.tsx's AuthRedirect, which checks isPasswordRecovery).
-        if (isPasswordRecoveryUrl()) {
+        if (isInitialUrlPasswordRecovery) {
           setPasswordRecovery(true);
           setLoading(false);
           return;
@@ -71,7 +55,7 @@ export function useAuth() {
     // Listener for auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       (event, session) => {
-        const recovering = event === 'PASSWORD_RECOVERY' || isPasswordRecoveryUrl();
+        const recovering = event === 'PASSWORD_RECOVERY' || isInitialUrlPasswordRecovery;
         setPasswordRecovery(recovering);
         if (recovering) {
           return;

@@ -12,6 +12,7 @@ import { DatabasePage } from "@/pages/DatabasePage";
 import { AuthPage } from "@/pages/AuthPage";
 import { useAuthStore } from "@/store/useAuthStore";
 import { useAuth } from "@/hooks/useAuth";
+import { isInitialUrlPasswordRecovery } from "@/lib/supabase";
 
 import { OrganizationPage } from "@/pages/OrganizationPage";
 import { TeamPage } from "@/pages/TeamPage";
@@ -61,7 +62,7 @@ function AuthRedirect({ children }: { children: React.ReactNode }) {
   // form instead of being bounced to /dashboard like a normal authenticated
   // visit to /auth/*. Scoped to this one route only — every other /auth/*
   // route (and every protected route below) keeps its existing behavior.
-  const isRecoveryException = isPasswordRecovery && location.pathname === "/auth/update-password";
+  const isRecoveryException = (isPasswordRecovery || isInitialUrlPasswordRecovery) && location.pathname === "/auth/update-password";
 
   if (isAuthenticated && !isRecoveryException) {
     return <Navigate to="/dashboard" replace />;
