@@ -37,8 +37,21 @@ export function AuthPage() {
       if (type === 'recovery' || code) {
         setIsVerifyingRecovery(true);
         console.log("[Runtime] Recovery link detected, verifying...");
-        
+
         try {
+          // DIAGNOSTIC GUARD: Supabase deliberately preserves an existing
+          // session when a URL-based login fails to process (see
+          // @supabase/auth-js GoTrueClient._initialize(): "Don't remove
+          // existing session on URL login failure... shouldn't invalidate a
+          // valid session"). Without this, a stale session already sitting in
+          // this browser (from earlier activity, another account, or a
+          // previous partially-completed flow) could satisfy the checks below
+          // even if THIS link's own tokens were never actually exchanged —
+          // and updateUser() would then silently mutate the wrong account.
+          // Clearing local session state first guarantees that any session
+          // found past this point was established by this link's own tokens.
+          await supabase.auth.signOut({ scope: 'local' }).catch(() => {});
+
           if (code) {
             // PKCE Flow
             const { error } = await supabase.auth.exchangeCodeForSession(code);
@@ -189,11 +202,42 @@ export function AuthPage() {
         if (error) throw error;
         setSuccess("Password reset email sent.");
       } else if (mode === "update-password") {
+        // DIAGNOSTIC CHECKPOINT: getUser() makes a fresh round-trip to
+        // Supabase's /auth/v1/user endpoint (unlike getSession(), which can
+        // return cached local state) — this confirms, right before the
+        // mutation, exactly which account's session is about to be changed.
+        // Note: a Supabase implicit recovery link never includes the target
+        // email in the URL (only tokens), so there is no independent
+        // "expected email" in this app to compare against — this logs and
+        // surfaces the actual identity instead, which is both the honest
+        // option and the directly useful one for diagnosis.
+        const { data: activeUser, error: getUserError } = await supabase.auth.getUser();
+        console.log("[Runtime][Recovery] Active session immediately before updateUser():", {
+          id: activeUser?.user?.id ?? null,
+          email: activeUser?.user?.email ?? null,
+          getUserError: getUserError?.message ?? null,
+        });
+
+        if (getUserError || !activeUser?.user) {
+          throw new Error("Auth session missing!");
+        }
+
         const { error } = await supabase.auth.updateUser({
           password: newPassword
         }).catch(err => ({ error: err }));
-        if (error) throw error;
-        setSuccess("Password updated successfully. You can now login.");
+        if (error) {
+          console.error("[Runtime][Recovery] updateUser() FAILED for:", {
+            id: activeUser.user.id,
+            email: activeUser.user.email,
+            error: error.message,
+          });
+          throw error;
+        }
+        console.log("[Runtime][Recovery] updateUser() succeeded for:", {
+          id: activeUser.user.id,
+          email: activeUser.user.email,
+        });
+        setSuccess(`Password updated successfully for ${activeUser.user.email}. You can now login.`);
         setTimeout(() => navigate("/auth/login"), 2000);
       }
     } catch (err: any) {
