@@ -33,7 +33,26 @@ function supabaseConfig(): { url: string; anonKey: string } | null {
     process.env.VITE_SUPABASE_ANON_KEY;
 
   if (!url || !anonKey) return null;
-  return { url: url.replace(/\/+$/, ""), anonKey };
+
+  const trimmedUrl = url.replace(/\/+$/, "");
+
+  // Defensive guard: SUPABASE_URL has previously been misconfigured with the
+  // Postgres DB host (db.<ref>.supabase.co) instead of the Supabase API host
+  // (<ref>.supabase.co), which silently breaks every fetch() below. Fail
+  // closed through the existing !config branch rather than let that request
+  // go out to a host that was never meant to serve the Auth/REST API.
+  try {
+    const parsedUrl = new URL(trimmedUrl);
+    if (/^db\./i.test(parsedUrl.hostname)) {
+      console.error("[auth] SUPABASE_URL points at the DB host, not the Supabase API host");
+      return null;
+    }
+  } catch {
+    console.error("[auth] SUPABASE_URL is not a valid URL");
+    return null;
+  }
+
+  return { url: trimmedUrl, anonKey };
 }
 
 function bearerToken(req: Request): string | null {
@@ -99,7 +118,13 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
       return deny(401, "invalid_token", "Supabase returned no user id.");
     }
     userId = user.id;
-  } catch {
+  } catch (err) {
+    console.error(
+      "[auth] Supabase user verification failed:",
+      err instanceof Error ? err.message : String(err),
+      "code=",
+      (err as any)?.code,
+    );
     return deny(503, "auth_unavailable", "Could not reach Supabase to verify the token.");
   }
 
