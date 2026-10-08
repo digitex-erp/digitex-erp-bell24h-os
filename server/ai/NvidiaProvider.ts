@@ -17,9 +17,9 @@ import type {
 const NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1";
 
 // Overridable via NVIDIA_MODEL so a future NVIDIA model retirement needs only
-// an environment-variable change, not a redeploy. Falls back to the current
-// (as of this fix) non-deprecated model if the env var is unset.
-export const DEFAULT_MODEL = process.env.NVIDIA_MODEL?.trim() || "meta/llama-3.3-70b-instruct";
+// an environment-variable change, not a redeploy. Falls back to the confirmed
+// live production model (proven via D2) if the env var is unset.
+export const DEFAULT_MODEL = process.env.NVIDIA_MODEL?.trim() || "z-ai/glm-5.3";
 
 const REQUEST_TIMEOUT_MS = 30_000;
 
