@@ -59,14 +59,59 @@ const budgetByOrg = new Map<string, BudgetEntry>();
 // ============================================================================
 // 1B. REQUEST DEADLINE (D4.3-A)
 // ============================================================================
+// Valid range for a deadline supplied by an external-facing source: the
+// inbound x-bell24h-deadline-ms header, or the AI_ROUTER_DEADLINE_MS
+// deployment config. Both represent a human/operator-chosen value, so both
+// are held to the same sane range and neither can let NaN, Infinity, zero,
+// negative, or an absurdly large value reach deadlineAt or
+// AbortSignal.timeout().
+export const MIN_DEADLINE_MS = 1000;
+export const MAX_DEADLINE_MS = 60000;
+
+/**
+ * Returns `raw` as a validated deadline (ms) if it is a finite number within
+ * [MIN_DEADLINE_MS, MAX_DEADLINE_MS]; otherwise returns undefined so the
+ * caller can fall through to its own default. Never throws. Use this for
+ * the header and the environment-variable default — not for
+ * RouterContext.deadlineMs (see sanitizeInternalDeadlineMs below).
+ */
+export function parseValidDeadlineMs(raw: unknown): number | undefined {
+  if (raw === undefined || raw === null || raw === "") return undefined;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return undefined;
+  if (parsed < MIN_DEADLINE_MS || parsed > MAX_DEADLINE_MS) return undefined;
+  return parsed;
+}
+
+/**
+ * Guards RouterContext.deadlineMs against the genuinely dangerous values
+ * (NaN, Infinity, zero, negative — anything that would break deadlineAt's
+ * arithmetic or make AbortSignal.timeout() throw), without imposing
+ * MIN_DEADLINE_MS/MAX_DEADLINE_MS. Those bounds exist to keep an external
+ * caller's header (or a misconfigured deployment's env var) within a sane
+ * human-chosen range; ctx.deadlineMs is an internal field — server.ts
+ * already runs the header through parseValidDeadlineMs before ever
+ * assigning it here, and a direct/internal/test caller may legitimately
+ * want a deadline shorter than MIN_DEADLINE_MS (e.g. to exercise the
+ * exhaustion path deterministically, as this module's own tests do).
+ */
+function sanitizeInternalDeadlineMs(raw: unknown): number | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return undefined;
+  return parsed;
+}
+
 // 12,000ms is derived from VyaparSethu's current 15,000ms SDK timeout
 // (its own AbortSignal.timeout(15000), see client.ts) — leaving ~3s margin
 // for S2S auth, body validation, and the response trip back to the caller.
 // This is a stopgap default until callers send their own deadline via the
 // x-bell24h-deadline-ms header (see server.ts's resolution of that header
-// for the /api/v1/ai/text route); RouterContext.deadlineMs, when supplied,
-// always takes precedence over this constant.
-const DEFAULT_ROUTER_DEADLINE_MS = Number(process.env.AI_ROUTER_DEADLINE_MS ?? 12000);
+// for the /api/v1/ai/text route); RouterContext.deadlineMs, when supplied
+// AND valid, always takes precedence over this constant. An invalid
+// AI_ROUTER_DEADLINE_MS (unset, non-numeric, NaN, infinite, zero, negative,
+// or out of range) safely falls back to the 12,000ms literal below.
+export const DEFAULT_ROUTER_DEADLINE_MS = parseValidDeadlineMs(process.env.AI_ROUTER_DEADLINE_MS) ?? 12000;
 
 // Below this much remaining budget, no further candidate is attempted —
 // matches the floor used by server.ts's own header validation reasoning.
@@ -402,7 +447,7 @@ export async function routeText(
     throw new Error("No operational AI providers available in current environment.");
   }
 
-  const deadlineMs = ctx.deadlineMs ?? DEFAULT_ROUTER_DEADLINE_MS;
+  const deadlineMs = sanitizeInternalDeadlineMs(ctx.deadlineMs) ?? DEFAULT_ROUTER_DEADLINE_MS;
   const deadlineAt = Date.now() + deadlineMs;
 
   let lastError: any = null;
@@ -533,7 +578,7 @@ export async function routeJson<T>(
     throw new Error("No operational AI providers available in current environment.");
   }
 
-  const deadlineMs = ctx.deadlineMs ?? DEFAULT_ROUTER_DEADLINE_MS;
+  const deadlineMs = sanitizeInternalDeadlineMs(ctx.deadlineMs) ?? DEFAULT_ROUTER_DEADLINE_MS;
   const deadlineAt = Date.now() + deadlineMs;
 
   let lastError: any = null;

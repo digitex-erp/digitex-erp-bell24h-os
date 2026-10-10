@@ -2,36 +2,72 @@
  * D4.3-A — Router deadline & cancellation tests.
  *
  * Uses Node's built-in test runner (no new dependency). `fetch` is stubbed
- * per-test so these never make a real network call; provider API keys are
- * set to harmless in-process-only placeholder strings purely so
- * `isProviderConfigured()` includes the provider in the candidate list —
- * no real credential is read, sent, or committed anywhere.
+ * per-test so these never make a real network call for the five providers
+ * whose adapters use it (NVIDIA/DeepSeek/Qwen/GLM/MiniMax). Gemini's adapter
+ * uses the @google/genai SDK's own internal HTTP transport, not global
+ * `fetch` — stubbing `fetch` does NOT intercept it. If a real GEMINI_API_KEY
+ * (or a real MINIMAX_API_KEY/NINIMAX_API_KEY/GLN_API_KEY alias) happens to be
+ * present in the ambient environment this suite runs in, `isProviderConfigured`
+ * would include that provider as a real, unmocked candidate — risking a
+ * genuine live API call during what must stay an isolated unit test. To
+ * close that gap, every provider env var this router knows about (not just
+ * the four this suite actually exercises) is explicitly saved and forced to
+ * a known state for the duration of the run, then restored exactly.
  */
 
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { routeText, computePerAttemptCapMs, resetCircuitBreaker } from "./ProviderRouter.js";
+import {
+  routeText,
+  routeJson,
+  computePerAttemptCapMs,
+  parseValidDeadlineMs,
+  resetCircuitBreaker,
+  DEFAULT_ROUTER_DEADLINE_MS,
+  MIN_DEADLINE_MS,
+  MAX_DEADLINE_MS,
+} from "./ProviderRouter.js";
 import type { RouterContext } from "./ProviderTypes.js";
 
-const ORIGINAL_ENV = {
-  NVIDIA_API_KEY: process.env.NVIDIA_API_KEY,
-  DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY,
-  QWEN_API_KEY: process.env.QWEN_API_KEY,
-  GLM_API_KEY: process.env.GLM_API_KEY,
-};
+// Every env var name any adapter reads (ProviderManager.ts's ENV_VARS_BY_PROVIDER),
+// not only the ones this suite deliberately configures.
+const ALL_PROVIDER_ENV_VARS = [
+  "NVIDIA_API_KEY",
+  "DEEPSEEK_API_KEY",
+  "QWEN_API_KEY",
+  "GLM_API_KEY",
+  "GLN_API_KEY",
+  "MINIMAX_API_KEY",
+  "NINIMAX_API_KEY",
+  "GEMINI_API_KEY",
+] as const;
+
+const ORIGINAL_ENV: Record<string, string | undefined> = {};
+for (const name of ALL_PROVIDER_ENV_VARS) {
+  ORIGINAL_ENV[name] = process.env[name];
+}
+
+// Providers this suite's mocked `fetch` can safely stand in for.
+const CONFIGURED_FOR_TEST = ["NVIDIA_API_KEY", "DEEPSEEK_API_KEY", "QWEN_API_KEY", "GLM_API_KEY"] as const;
 
 before(() => {
-  process.env.NVIDIA_API_KEY = "test-placeholder-not-real";
-  process.env.DEEPSEEK_API_KEY = "test-placeholder-not-real";
-  process.env.QWEN_API_KEY = "test-placeholder-not-real";
-  process.env.GLM_API_KEY = "test-placeholder-not-real";
+  for (const name of ALL_PROVIDER_ENV_VARS) {
+    delete process.env[name];
+  }
+  for (const name of CONFIGURED_FOR_TEST) {
+    process.env[name] = "test-placeholder-not-real";
+  }
 });
 
 after(() => {
-  process.env.NVIDIA_API_KEY = ORIGINAL_ENV.NVIDIA_API_KEY;
-  process.env.DEEPSEEK_API_KEY = ORIGINAL_ENV.DEEPSEEK_API_KEY;
-  process.env.QWEN_API_KEY = ORIGINAL_ENV.QWEN_API_KEY;
-  process.env.GLM_API_KEY = ORIGINAL_ENV.GLM_API_KEY;
+  for (const name of ALL_PROVIDER_ENV_VARS) {
+    const original = ORIGINAL_ENV[name];
+    if (original === undefined) {
+      delete process.env[name];
+    } else {
+      process.env[name] = original;
+    }
+  }
 });
 
 let orgCounter = 0;
@@ -55,6 +91,70 @@ function resetAllBreakers() {
     }
   }
 }
+
+// ---------------------------------------------------------------------------
+// Deadline parsing/validation — header, env var, and RouterContext all funnel
+// through parseValidDeadlineMs, so testing it once covers every source.
+// ---------------------------------------------------------------------------
+
+test("parseValidDeadlineMs: accepts a valid in-range value", () => {
+  assert.equal(parseValidDeadlineMs(5000), 5000);
+  assert.equal(parseValidDeadlineMs("5000"), 5000);
+});
+
+test("parseValidDeadlineMs: accepts the inclusive boundary values", () => {
+  assert.equal(parseValidDeadlineMs(MIN_DEADLINE_MS), MIN_DEADLINE_MS);
+  assert.equal(parseValidDeadlineMs(MAX_DEADLINE_MS), MAX_DEADLINE_MS);
+});
+
+test("parseValidDeadlineMs: rejects absent/empty values", () => {
+  assert.equal(parseValidDeadlineMs(undefined), undefined);
+  assert.equal(parseValidDeadlineMs(null), undefined);
+  assert.equal(parseValidDeadlineMs(""), undefined);
+});
+
+test("parseValidDeadlineMs: rejects non-numeric, NaN, and infinite values", () => {
+  assert.equal(parseValidDeadlineMs("abc"), undefined);
+  assert.equal(parseValidDeadlineMs(NaN), undefined);
+  assert.equal(parseValidDeadlineMs(Infinity), undefined);
+  assert.equal(parseValidDeadlineMs("Infinity"), undefined);
+  assert.equal(parseValidDeadlineMs(-Infinity), undefined);
+});
+
+test("parseValidDeadlineMs: rejects zero, negative, and out-of-range values", () => {
+  assert.equal(parseValidDeadlineMs(0), undefined);
+  assert.equal(parseValidDeadlineMs(-100), undefined);
+  assert.equal(parseValidDeadlineMs(MIN_DEADLINE_MS - 1), undefined);
+  assert.equal(parseValidDeadlineMs(MAX_DEADLINE_MS + 1), undefined);
+});
+
+test("DEFAULT_ROUTER_DEADLINE_MS: is the documented 12,000ms literal when AI_ROUTER_DEADLINE_MS is unset in this process", () => {
+  // This process never sets AI_ROUTER_DEADLINE_MS, so the module-level
+  // constant must have resolved to the hardcoded fallback.
+  assert.equal(DEFAULT_ROUTER_DEADLINE_MS, 12000);
+});
+
+test("routeText: an invalid ctx.deadlineMs (e.g. NaN from a careless internal caller) falls through to the default rather than reaching deadlineAt unchecked", async () => {
+  resetAllBreakers();
+  const originalFetch = global.fetch;
+  global.fetch = (async () =>
+    new Response(JSON.stringify({ choices: [{ message: { content: "ok" } }] }), {
+      status: 200,
+    })) as any;
+
+  try {
+    // deadlineMs: NaN must not propagate into AbortSignal.timeout(NaN), which
+    // throws synchronously — if it did, this call would reject instead of
+    // succeeding. Success here proves the NaN was replaced by the default.
+    const result = await routeText(freshCtx({ deadlineMs: NaN }), {
+      prompt: "hi",
+      preferredProvider: "nvidia",
+    });
+    assert.equal(result.data, "ok");
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
 
 // ---------------------------------------------------------------------------
 // Pure budget-math unit tests
@@ -194,6 +294,59 @@ test("routeText: deadline exceeded mid-cascade stops before exhausting every con
       calls >= 1 && calls < 4,
       `expected an early stop before all 4 candidates were attempted, got ${calls} calls`
     );
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+// ---------------------------------------------------------------------------
+// routeJson: the second router execution path shares the identical deadline
+// logic (D4.3-A applied it to both). These two tests confirm that sharing
+// is real, not just read from the source — a gap the first version of this
+// suite left uncovered.
+// ---------------------------------------------------------------------------
+
+test("routeJson: deadline already exhausted at router entry — clean error, zero provider calls", async () => {
+  resetAllBreakers();
+  let calls = 0;
+  const originalFetch = global.fetch;
+  global.fetch = (async () => {
+    calls += 1;
+    throw new Error("fetch should never be called in this test");
+  }) as any;
+
+  try {
+    await assert.rejects(
+      () =>
+        routeJson(freshCtx({ deadlineMs: 10 }), {
+          prompt: "hi",
+          preferredProvider: "nvidia",
+          responseSchema: { type: "object" },
+        }),
+      /Request deadline exceeded before any provider could be attempted\./
+    );
+    assert.equal(calls, 0, "no provider fetch should happen once the deadline is already exhausted");
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("routeJson: success on the first candidate is unaffected by the deadline machinery", async () => {
+  resetAllBreakers();
+  const originalFetch = global.fetch;
+  global.fetch = (async () =>
+    new Response(JSON.stringify({ choices: [{ message: { content: '{"ok":true}' } }] }), {
+      status: 200,
+    })) as any;
+
+  try {
+    const result = await routeJson<{ ok: boolean }>(freshCtx({ deadlineMs: 12000 }), {
+      prompt: "hi",
+      preferredProvider: "nvidia",
+      responseSchema: { type: "object" },
+    });
+    assert.deepEqual(result.data, { ok: true });
+    assert.equal(result.provider, "nvidia");
   } finally {
     global.fetch = originalFetch;
   }

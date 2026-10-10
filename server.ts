@@ -113,18 +113,14 @@ export async function createApp() {
   // shared fallback-cascade budget. Nothing sends this header yet — resolving
   // it here is forward-compatible plumbing; an absent/invalid header falls
   // through to the router's own env-var-backed default (ProviderRouter.ts).
+  // Validation (range, NaN/Infinity rejection) lives in one place —
+  // aiRouter.parseValidDeadlineMs — shared with the env-var default and
+  // RouterContext.deadlineMs so all three sources apply the identical rule.
   const DEADLINE_HEADER = "x-bell24h-deadline-ms";
-  const MIN_DEADLINE_MS = 1000;
-  const MAX_DEADLINE_MS = 60000;
   const resolveDeadlineMs = (req: express.Request): number | undefined => {
     const header = req.headers[DEADLINE_HEADER];
     const raw = Array.isArray(header) ? header[0] : header;
-    if (!raw) return undefined;
-    const parsed = Number(raw);
-    if (!Number.isFinite(parsed) || parsed < MIN_DEADLINE_MS || parsed > MAX_DEADLINE_MS) {
-      return undefined;
-    }
-    return parsed;
+    return aiRouter.parseValidDeadlineMs(raw);
   };
 
   app.post("/api/v1/ai/text", requireServiceAuth, async (req, res) => {
