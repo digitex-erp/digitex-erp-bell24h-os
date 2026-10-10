@@ -244,13 +244,21 @@ test("routeText: deadline exceeded on the first provider stops the cascade after
     // deadlineMs=100 -> first attempt cap = 100*0.6 = 60ms; remaining after
     // that attempt = 40ms, which is below the 50ms floor, so no second
     // candidate is attempted even though more are configured.
+    // D4.4: this is now a distinct RouterDeadlineExceededError (code
+    // "router_deadline_exceeded"), not the generic "All available AI
+    // providers failed" message — the cascade stopped because the shared
+    // deadline ran out, not because every candidate was actually tried.
     await assert.rejects(
       () =>
         routeText(freshCtx({ deadlineMs: 100 }), {
           prompt: "hi",
           preferredProvider: "nvidia",
         }),
-      /All available AI providers failed for policy "balanced"\. Last error: NVIDIA request timed out\./
+      (err: any) => {
+        assert.equal(err.code, "router_deadline_exceeded");
+        assert.match(err.message, /Request deadline exceeded after 1 provider attempt\(s\).*NVIDIA request timed out/);
+        return true;
+      }
     );
     assert.equal(calls, 1, "only the first candidate should have been attempted");
   } finally {
@@ -282,13 +290,18 @@ test("routeText: deadline exceeded mid-cascade stops before exhausting every con
     // invariant this test actually proves is that fewer than all 4
     // configured candidates were attempted, i.e. the deadline cut the
     // cascade short rather than it exhausting naturally.
+    // D4.4: distinct RouterDeadlineExceededError, same reasoning as above.
     await assert.rejects(
       () =>
         routeText(freshCtx({ deadlineMs: 220 }), {
           prompt: "hi",
           preferredProvider: "nvidia",
         }),
-      /All available AI providers failed for policy "balanced"\./
+      (err: any) => {
+        assert.equal(err.code, "router_deadline_exceeded");
+        assert.match(err.message, /Request deadline exceeded after \d+ provider attempt\(s\)/);
+        return true;
+      }
     );
     assert.ok(
       calls >= 1 && calls < 4,
@@ -347,6 +360,160 @@ test("routeJson: success on the first candidate is unaffected by the deadline ma
     });
     assert.deepEqual(result.data, { ok: true });
     assert.equal(result.provider, "nvidia");
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+// ---------------------------------------------------------------------------
+// D4.4 — distinguishing router deadline exhaustion from genuine provider
+// failure, and rejecting empty/malformed "successful" provider responses.
+// ---------------------------------------------------------------------------
+
+test("routeText: a provider timeout followed by a successful fallback still returns success (genuine timeout, not router deadline exhaustion)", async () => {
+  resetAllBreakers();
+  const originalFetch = global.fetch;
+  let call = 0;
+  global.fetch = ((_url: string, init: any) =>
+    new Promise((resolve, reject) => {
+      call += 1;
+      if (call === 1) {
+        // nvidia: never resolves on its own, aborted by its per-attempt cap
+        init?.signal?.addEventListener("abort", () => {
+          const err = new Error("aborted");
+          err.name = "TimeoutError";
+          reject(err);
+        });
+      } else {
+        // deepseek: succeeds immediately
+        resolve(new Response(JSON.stringify({ choices: [{ message: { content: "ok" } }] }), { status: 200 }));
+      }
+    })) as any;
+
+  try {
+    // deadlineMs=1000 keeps this test fast (nvidia's cap = 600ms, still
+    // large relative to the 50ms floor) without changing what's proven:
+    // a genuine per-attempt timeout, with budget left over, falls through
+    // to a successful next candidate — this is not deadline exhaustion.
+    const result = await routeText(freshCtx({ deadlineMs: 1000 }), {
+      prompt: "hi",
+      preferredProvider: "nvidia",
+    });
+    assert.equal(result.data, "ok");
+    assert.equal(result.provider, "deepseek");
+    assert.equal(result.fallbackFrom, "nvidia");
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("routeText: every candidate genuinely failing (not due to deadline) throws the generic aggregate error, NOT RouterDeadlineExceededError", async () => {
+  resetAllBreakers();
+  const originalFetch = global.fetch;
+  // Rejects immediately with a real-shaped upstream error — not an abort —
+  // so the loop exhausts the (single) candidate naturally, never breaking
+  // early on the deadline check.
+  global.fetch = (async () =>
+    new Response(JSON.stringify({ error: { message: "simulated upstream 500" } }), { status: 500 })) as any;
+
+  try {
+    await assert.rejects(
+      () =>
+        routeText(freshCtx({ deadlineMs: 12000 }), {
+          prompt: "hi",
+          preferredProvider: "nvidia",
+          allowFallback: false, // isolates this to exactly one genuinely-exhausted candidate
+        }),
+      (err: any) => {
+        assert.notEqual(err.code, "router_deadline_exceeded");
+        assert.match(err.message, /simulated upstream 500/);
+        return true;
+      }
+    );
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("routeText: no configured providers at all maps to the existing provider_credentials_unavailable code", async () => {
+  // Temporarily unconfigure everything this suite normally configures, to
+  // exercise the genuinely-empty-candidate-list path in isolation.
+  const saved: Record<string, string | undefined> = {};
+  for (const name of CONFIGURED_FOR_TEST) {
+    saved[name] = process.env[name];
+    delete process.env[name];
+  }
+  try {
+    await assert.rejects(
+      () => routeText(freshCtx(), { prompt: "hi" }),
+      (err: any) => {
+        assert.equal(err.code, "provider_credentials_unavailable");
+        assert.match(err.message, /No operational AI providers available/);
+        return true;
+      }
+    );
+  } finally {
+    for (const name of CONFIGURED_FOR_TEST) {
+      if (saved[name] === undefined) delete process.env[name];
+      else process.env[name] = saved[name];
+    }
+  }
+});
+
+test("routeText: whitespace-only provider content is rejected, not returned as a false success", async () => {
+  resetAllBreakers();
+  const originalFetch = global.fetch;
+  global.fetch = (async () =>
+    new Response(JSON.stringify({ choices: [{ message: { content: "   " } }] }), { status: 200 })) as any;
+
+  try {
+    await assert.rejects(
+      () =>
+        routeText(freshCtx({ deadlineMs: 12000 }), {
+          prompt: "hi",
+          preferredProvider: "nvidia",
+          allowFallback: false,
+        }),
+      /returned empty or invalid text content/
+    );
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("routeText: a malformed response (missing choices entirely) is rejected the same way as empty content", async () => {
+  resetAllBreakers();
+  const originalFetch = global.fetch;
+  global.fetch = (async () => new Response(JSON.stringify({ unexpected: "shape" }), { status: 200 })) as any;
+
+  try {
+    await assert.rejects(
+      () =>
+        routeText(freshCtx({ deadlineMs: 12000 }), {
+          prompt: "hi",
+          preferredProvider: "nvidia",
+          allowFallback: false,
+        }),
+      /returned empty or invalid text content/
+    );
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("routeJson: a valid but textually-unusual JSON object (e.g. {}) is NOT rejected — the text-emptiness check must not apply to the JSON path", async () => {
+  resetAllBreakers();
+  const originalFetch = global.fetch;
+  global.fetch = (async () =>
+    new Response(JSON.stringify({ choices: [{ message: { content: "{}" } }] }), { status: 200 })) as any;
+
+  try {
+    const result = await routeJson<Record<string, never>>(freshCtx({ deadlineMs: 12000 }), {
+      prompt: "hi",
+      preferredProvider: "nvidia",
+      responseSchema: { type: "object" },
+    });
+    assert.deepEqual(result.data, {});
   } finally {
     global.fetch = originalFetch;
   }

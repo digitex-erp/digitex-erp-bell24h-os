@@ -134,6 +134,23 @@ export class BudgetExceededError extends Error {
   }
 }
 
+/**
+ * D4.4: thrown when the shared request deadline (D4.3-A) is the reason the
+ * fallback cascade stopped — whether zero attempts were made (deadline
+ * already gone at router entry) or some were made and the deadline ran out
+ * before a remaining candidate could be tried. Distinct from a genuine
+ * provider failure (every candidate was actually attempted and failed on
+ * its own terms, loop exhausted naturally) — server.ts maps this to the
+ * canonical TIMEOUT code / HTTP 504, not INTERNAL_ERROR.
+ */
+export class RouterDeadlineExceededError extends Error {
+  readonly code = "router_deadline_exceeded";
+  constructor(message: string) {
+    super(message);
+    this.name = "RouterDeadlineExceededError";
+  }
+}
+
 function consumeBudget(organizationId: string): void {
   const now = Date.now();
   const entry = budgetByOrg.get(organizationId);
@@ -431,6 +448,22 @@ async function executeProviderJson<T>(
 }
 
 /**
+ * D4.4: "no configured provider at all" is semantically the same class of
+ * issue as a single provider's own missing-credential case (already mapped
+ * to 503 PROVIDER_UNAVAILABLE in server.ts) — reusing that existing code
+ * here avoids introducing a fourth HTTP status/code pairing for what is,
+ * from the caller's perspective, the same outcome: nothing is usable right
+ * now.
+ */
+function createNoProvidersError(): Error {
+  const err: Error & { code?: string } = new Error(
+    "No operational AI providers available in current environment."
+  );
+  err.code = "provider_credentials_unavailable";
+  return err;
+}
+
+/**
  * Executes a text or JSON completion through the multi-provider routing policy.
  * Seamlessly handles failover to secondary providers on upstream failure.
  */
@@ -444,7 +477,7 @@ export async function routeText(
   const candidates = getCandidateProviders(policy, opts.preferredProvider);
 
   if (candidates.length === 0) {
-    throw new Error("No operational AI providers available in current environment.");
+    throw createNoProvidersError();
   }
 
   const deadlineMs = sanitizeInternalDeadlineMs(ctx.deadlineMs) ?? DEFAULT_ROUTER_DEADLINE_MS;
@@ -453,6 +486,7 @@ export async function routeText(
   let lastError: any = null;
   let fallbackFrom: ServerProviderName | undefined;
   let attemptsMade = 0;
+  let stoppedDueToDeadline = false;
 
   for (let i = 0; i < candidates.length; i++) {
     const provider = candidates[i];
@@ -463,6 +497,7 @@ export async function routeText(
       deadlineAt - Date.now()
     );
     if (perAttemptCapMs === null) {
+      stoppedDueToDeadline = true;
       break; // deadline exceeded; no further candidates attempted
     }
     const signal = AbortSignal.timeout(perAttemptCapMs);
@@ -471,6 +506,14 @@ export async function routeText(
     attemptsMade++;
     try {
       const result = await executeProviderText(provider, { ...opts, signal });
+      // D4.4: a 200/OK response with no usable text is not a success — reject
+      // it here so it falls into the same catch block as any other provider
+      // failure, letting the existing fallback loop (still bounded by the
+      // shared deadline) try the next candidate instead of returning empty
+      // content as if it were a real answer.
+      if (typeof result.data !== "string" || result.data.trim().length === 0) {
+        throw new Error(`Provider "${provider}" returned empty or invalid text content.`);
+      }
       recordBreakerSuccess(provider);
 
       const record: TelemetryRecord = {
@@ -556,8 +599,12 @@ export async function routeText(
     }
   }
 
-  if (attemptsMade === 0) {
-    throw new Error("Request deadline exceeded before any provider could be attempted.");
+  if (stoppedDueToDeadline) {
+    throw new RouterDeadlineExceededError(
+      attemptsMade === 0
+        ? "Request deadline exceeded before any provider could be attempted."
+        : `Request deadline exceeded after ${attemptsMade} provider attempt(s) for policy "${policy}". Last error: ${lastError?.message ?? "none"}.`
+    );
   }
 
   throw new Error(
@@ -575,7 +622,7 @@ export async function routeJson<T>(
   const candidates = getCandidateProviders(policy, opts.preferredProvider);
 
   if (candidates.length === 0) {
-    throw new Error("No operational AI providers available in current environment.");
+    throw createNoProvidersError();
   }
 
   const deadlineMs = sanitizeInternalDeadlineMs(ctx.deadlineMs) ?? DEFAULT_ROUTER_DEADLINE_MS;
@@ -584,6 +631,7 @@ export async function routeJson<T>(
   let lastError: any = null;
   let fallbackFrom: ServerProviderName | undefined;
   let attemptsMade = 0;
+  let stoppedDueToDeadline = false;
 
   for (let i = 0; i < candidates.length; i++) {
     const provider = candidates[i];
@@ -594,6 +642,7 @@ export async function routeJson<T>(
       deadlineAt - Date.now()
     );
     if (perAttemptCapMs === null) {
+      stoppedDueToDeadline = true;
       break; // deadline exceeded; no further candidates attempted
     }
     const signal = AbortSignal.timeout(perAttemptCapMs);
@@ -668,8 +717,12 @@ export async function routeJson<T>(
     }
   }
 
-  if (attemptsMade === 0) {
-    throw new Error("Request deadline exceeded before any provider could be attempted.");
+  if (stoppedDueToDeadline) {
+    throw new RouterDeadlineExceededError(
+      attemptsMade === 0
+        ? "Request deadline exceeded before any provider could be attempted."
+        : `Request deadline exceeded after ${attemptsMade} provider attempt(s) for JSON request. Last error: ${lastError?.message ?? "none"}.`
+    );
   }
 
   throw new Error(

@@ -176,6 +176,15 @@ export async function createApp() {
       });
     } catch (err: any) {
       console.error("[Runtime] S2S AI text generation error:", err.message);
+      // D4.4: the shared request deadline (D4.3-A) running out — whether
+      // before any attempt or partway through the fallback cascade — is a
+      // distinct, retryable condition from a genuine "every provider failed
+      // on its own terms" outcome. Mapped to the existing TIMEOUT canonical
+      // code (defined but previously unused) and HTTP 504, not the generic
+      // 500 INTERNAL_ERROR this used to fall into.
+      if (err?.code === "router_deadline_exceeded") {
+        return sendError(res, 504, "TIMEOUT", requestId!, err.message);
+      }
       if (err?.code === "provider_credentials_unavailable") {
         return sendError(res, 503, "PROVIDER_UNAVAILABLE", requestId!, err.message);
       }
