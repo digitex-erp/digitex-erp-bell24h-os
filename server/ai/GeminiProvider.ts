@@ -29,9 +29,12 @@ export async function generateText(req: TextRequest): Promise<ProviderResult<str
   const model = req.model ?? DEFAULT_MODEL;
   const startedAt = Date.now();
 
+  // D4.3-A: pass through the router-supplied signal, if any, as the SDK's own
+  // abortSignal config field. No other behavior change for this adapter.
   const result: any = await client().models.generateContent({
     model,
     contents: req.prompt,
+    ...(req.signal ? { config: { abortSignal: req.signal } } : {}),
   });
 
   const usage = result.usageMetadata;
@@ -62,6 +65,7 @@ export async function generateJson<T>(req: JsonRequest): Promise<ProviderResult<
     config: {
       responseMimeType: "application/json",
       responseSchema: req.responseSchema as any,
+      ...(req.signal ? { abortSignal: req.signal } : {}),
     },
   });
 

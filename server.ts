@@ -109,6 +109,24 @@ export async function createApp() {
   // organizationId/userId passed to the router are fixed, non-client-supplied
   // constants identifying "VyaparSethu as a system" for budget/audit purposes only —
   // not a tenant mapping. See OS_INTEGRATION_DECISION_RECORD_V1.md Decisions A/B.
+  // D4.3-A: optional caller-supplied deadline override for the AI Router's
+  // shared fallback-cascade budget. Nothing sends this header yet — resolving
+  // it here is forward-compatible plumbing; an absent/invalid header falls
+  // through to the router's own env-var-backed default (ProviderRouter.ts).
+  const DEADLINE_HEADER = "x-bell24h-deadline-ms";
+  const MIN_DEADLINE_MS = 1000;
+  const MAX_DEADLINE_MS = 60000;
+  const resolveDeadlineMs = (req: express.Request): number | undefined => {
+    const header = req.headers[DEADLINE_HEADER];
+    const raw = Array.isArray(header) ? header[0] : header;
+    if (!raw) return undefined;
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed) || parsed < MIN_DEADLINE_MS || parsed > MAX_DEADLINE_MS) {
+      return undefined;
+    }
+    return parsed;
+  };
+
   app.post("/api/v1/ai/text", requireServiceAuth, async (req, res) => {
     const { serviceCaller, requestId } = req as ServiceAuthedRequest;
     const { prompt, provider, policy, workflowType, temperature, maxTokens } = req.body ?? {};
@@ -140,6 +158,7 @@ export async function createApp() {
       organizationId: serviceCaller!.system,
       requestId: requestId!,
       action: "ai.s2s.generateText",
+      deadlineMs: resolveDeadlineMs(req),
     };
 
     try {

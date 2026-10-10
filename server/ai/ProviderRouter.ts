@@ -56,6 +56,31 @@ interface BudgetEntry {
 
 const budgetByOrg = new Map<string, BudgetEntry>();
 
+// ============================================================================
+// 1B. REQUEST DEADLINE (D4.3-A)
+// ============================================================================
+// 12,000ms is derived from VyaparSethu's current 15,000ms SDK timeout
+// (its own AbortSignal.timeout(15000), see client.ts) — leaving ~3s margin
+// for S2S auth, body validation, and the response trip back to the caller.
+// This is a stopgap default until callers send their own deadline via the
+// x-bell24h-deadline-ms header (see server.ts's resolution of that header
+// for the /api/v1/ai/text route); RouterContext.deadlineMs, when supplied,
+// always takes precedence over this constant.
+const DEFAULT_ROUTER_DEADLINE_MS = Number(process.env.AI_ROUTER_DEADLINE_MS ?? 12000);
+
+// Below this much remaining budget, no further candidate is attempted —
+// matches the floor used by server.ts's own header validation reasoning.
+const MIN_REMAINING_BUDGET_MS = 50;
+
+// The first attempted candidate gets a larger, explicit share of the budget
+// rather than an equal split with however many candidates remain: an equal
+// split (e.g. 1/5 of 12s = 2,400ms) would be shorter than the one real
+// observed production success (NVIDIA, 3,176ms per D2), which would make
+// the only proven-healthy path unreachable under its own deadline. Every
+// candidate after the first falls back to an even split of whatever budget
+// is left at that point, recomputed fresh each iteration.
+const FIRST_ATTEMPT_BUDGET_SHARE = 0.6;
+
 export class BudgetExceededError extends Error {
   readonly code = "ai_budget_exceeded";
   constructor(public readonly limit: number) {
@@ -284,6 +309,35 @@ export function getTelemetrySummary(): {
 }
 
 // ============================================================================
+// 4B. PER-ATTEMPT BUDGET (D4.3-A)
+// ============================================================================
+
+/**
+ * Computes this attempt's own timeout cap: the first attempt gets
+ * FIRST_ATTEMPT_BUDGET_SHARE of whatever remains; every later attempt gets
+ * an even split across however many candidates are still untried. Always
+ * bounded above by the provider's own configured timeout. Returns null when
+ * the remaining budget is already at or below the floor, signaling that no
+ * further candidate should be attempted.
+ */
+export function computePerAttemptCapMs(
+  provider: ServerProviderName,
+  attemptIndex: number,
+  remainingCandidateCount: number,
+  remainingBudgetMs: number
+): number | null {
+  if (remainingBudgetMs <= MIN_REMAINING_BUDGET_MS) {
+    return null;
+  }
+  const providerTimeoutMs = manager.PROVIDER_REGISTRY[provider].timeoutMs;
+  const share =
+    attemptIndex === 0
+      ? remainingBudgetMs * FIRST_ATTEMPT_BUDGET_SHARE
+      : remainingBudgetMs / remainingCandidateCount;
+  return Math.max(1, Math.min(providerTimeoutMs, Math.round(share)));
+}
+
+// ============================================================================
 // 5. DISPATCH EXECUTION ENGINE
 // ============================================================================
 
@@ -348,13 +402,30 @@ export async function routeText(
     throw new Error("No operational AI providers available in current environment.");
   }
 
+  const deadlineMs = ctx.deadlineMs ?? DEFAULT_ROUTER_DEADLINE_MS;
+  const deadlineAt = Date.now() + deadlineMs;
+
   let lastError: any = null;
   let fallbackFrom: ServerProviderName | undefined;
+  let attemptsMade = 0;
 
-  for (const provider of candidates) {
+  for (let i = 0; i < candidates.length; i++) {
+    const provider = candidates[i];
+    const perAttemptCapMs = computePerAttemptCapMs(
+      provider,
+      i,
+      candidates.length - i,
+      deadlineAt - Date.now()
+    );
+    if (perAttemptCapMs === null) {
+      break; // deadline exceeded; no further candidates attempted
+    }
+    const signal = AbortSignal.timeout(perAttemptCapMs);
+
     const startedAt = Date.now();
+    attemptsMade++;
     try {
-      const result = await executeProviderText(provider, opts);
+      const result = await executeProviderText(provider, { ...opts, signal });
       recordBreakerSuccess(provider);
 
       const record: TelemetryRecord = {
@@ -440,6 +511,10 @@ export async function routeText(
     }
   }
 
+  if (attemptsMade === 0) {
+    throw new Error("Request deadline exceeded before any provider could be attempted.");
+  }
+
   throw new Error(
     `All available AI providers failed for policy "${policy}". Last error: ${lastError?.message}`
   );
@@ -458,13 +533,30 @@ export async function routeJson<T>(
     throw new Error("No operational AI providers available in current environment.");
   }
 
+  const deadlineMs = ctx.deadlineMs ?? DEFAULT_ROUTER_DEADLINE_MS;
+  const deadlineAt = Date.now() + deadlineMs;
+
   let lastError: any = null;
   let fallbackFrom: ServerProviderName | undefined;
+  let attemptsMade = 0;
 
-  for (const provider of candidates) {
+  for (let i = 0; i < candidates.length; i++) {
+    const provider = candidates[i];
+    const perAttemptCapMs = computePerAttemptCapMs(
+      provider,
+      i,
+      candidates.length - i,
+      deadlineAt - Date.now()
+    );
+    if (perAttemptCapMs === null) {
+      break; // deadline exceeded; no further candidates attempted
+    }
+    const signal = AbortSignal.timeout(perAttemptCapMs);
+
     const startedAt = Date.now();
+    attemptsMade++;
     try {
-      const result = await executeProviderJson<T>(provider, opts);
+      const result = await executeProviderJson<T>(provider, { ...opts, signal });
       recordBreakerSuccess(provider);
 
       const record: TelemetryRecord = {
@@ -529,6 +621,10 @@ export async function routeJson<T>(
         throw err;
       }
     }
+  }
+
+  if (attemptsMade === 0) {
+    throw new Error("Request deadline exceeded before any provider could be attempted.");
   }
 
   throw new Error(

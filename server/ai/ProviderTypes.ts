@@ -44,6 +44,12 @@ export interface TextRequest {
   systemPrompt?: string;
   temperature?: number;
   maxTokens?: number;
+  /**
+   * Router-derived abort signal bounding this one provider attempt (D4.3-A).
+   * When present, adapters use it instead of building their own local timeout.
+   * Absent for direct/internal callers that bypass the router.
+   */
+  signal?: AbortSignal;
 }
 
 export interface JsonRequest extends TextRequest {
@@ -80,6 +86,8 @@ export interface RouterContext {
   organizationId: string;
   requestId: string;
   action: string;
+  /** Overall deadline for the whole fallback cascade, in ms (D4.3-A). Defaults inside the router if omitted. */
+  deadlineMs?: number;
 }
 
 export interface RouterOptions extends TextRequest {
