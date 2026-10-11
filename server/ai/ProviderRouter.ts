@@ -399,6 +399,25 @@ export function computePerAttemptCapMs(
   return Math.max(1, Math.min(providerTimeoutMs, Math.round(share)));
 }
 
+/**
+ * D4.4.1: after the loop completes naturally — every configured candidate
+ * was actually attempted, stoppedDueToDeadline is false — the final failure
+ * can still be the shared deadline's fault rather than an independent
+ * provider failure. That is true only when BOTH hold: the last attempt's
+ * own error is a structurally-tagged provider timeout (set by the adapters
+ * when their AbortSignal fires — never inferred from message text), AND
+ * there is no meaningful shared budget left at the moment the loop ends.
+ * Checking both — not the code alone — is what keeps an ordinary
+ * provider-side timeout that happens to occur while plenty of shared budget
+ * remains from being misclassified as a router deadline exhaustion.
+ */
+function isFinalAttemptDeadlineCaused(lastError: unknown, deadlineAt: number): boolean {
+  return (
+    (lastError as { code?: string } | null)?.code === "provider_timeout" &&
+    deadlineAt - Date.now() <= MIN_REMAINING_BUDGET_MS
+  );
+}
+
 // ============================================================================
 // 5. DISPATCH EXECUTION ENGINE
 // ============================================================================
@@ -599,7 +618,7 @@ export async function routeText(
     }
   }
 
-  if (stoppedDueToDeadline) {
+  if (stoppedDueToDeadline || isFinalAttemptDeadlineCaused(lastError, deadlineAt)) {
     throw new RouterDeadlineExceededError(
       attemptsMade === 0
         ? "Request deadline exceeded before any provider could be attempted."
@@ -717,7 +736,7 @@ export async function routeJson<T>(
     }
   }
 
-  if (stoppedDueToDeadline) {
+  if (stoppedDueToDeadline || isFinalAttemptDeadlineCaused(lastError, deadlineAt)) {
     throw new RouterDeadlineExceededError(
       attemptsMade === 0
         ? "Request deadline exceeded before any provider could be attempted."

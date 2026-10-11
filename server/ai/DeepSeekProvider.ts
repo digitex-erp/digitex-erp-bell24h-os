@@ -81,7 +81,10 @@ export async function generateText(req: TextRequest): Promise<ProviderResult<str
     // a manually-aborted local AbortController rejects as "AbortError" — both
     // mean the same thing here: the request didn't finish in time.
     if (err?.name === "AbortError" || err?.name === "TimeoutError") {
-      throw new Error("DeepSeek request timed out.");
+      // D4.4.1: structured code, same reasoning as NvidiaProvider.ts.
+      const timeoutErr: Error & { code?: string } = new Error("DeepSeek request timed out.");
+      timeoutErr.code = "provider_timeout";
+      throw timeoutErr;
     }
     throw err;
   } finally {

@@ -62,7 +62,13 @@ export async function generateText(req: TextRequest): Promise<ProviderResult<str
     // a manually-aborted local AbortController rejects as "AbortError" — both
     // mean the same thing here: the request didn't finish in time.
     if (err?.name === "AbortError" || err?.name === "TimeoutError") {
-      throw new Error("NVIDIA request timed out.");
+      // D4.4.1: tagged with a structured code (not just message text) so the
+      // router can distinguish this from an ordinary upstream failure when
+      // deciding whether the shared deadline — not this provider alone — is
+      // the real cause of a final, naturally-exhausted cascade.
+      const timeoutErr: Error & { code?: string } = new Error("NVIDIA request timed out.");
+      timeoutErr.code = "provider_timeout";
+      throw timeoutErr;
     }
     throw new Error("NVIDIA request failed.");
   } finally {

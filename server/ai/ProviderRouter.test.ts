@@ -518,3 +518,145 @@ test("routeJson: a valid but textually-unusual JSON object (e.g. {}) is NOT reje
     global.fetch = originalFetch;
   }
 });
+
+// ---------------------------------------------------------------------------
+// D4.4.1 — last-candidate deadline classification.
+//
+// Demonstrated production gap: if the FINAL configured candidate is reached,
+// its own attempt is aborted by a signal derived from the shared deadline,
+// and the loop then completes naturally (never hits the early `break` that
+// sets stoppedDueToDeadline), the result was a generic 500 INTERNAL_ERROR
+// even though the shared deadline — not an independent provider failure —
+// is what actually prevented completion. These tests prove that gap first
+// (red, against the pre-fix code path), then prove the fix (green).
+// ---------------------------------------------------------------------------
+
+/**
+ * Isolates the candidate list to exactly [nvidia] for the duration of one
+ * test, by temporarily unconfiguring the other three providers this suite's
+ * shared before() hook normally configures. Needed so "the loop completes
+ * naturally" is unambiguous: with only one candidate, there is no second
+ * iteration that could either be skipped (early break) or attempted — a
+ * single-candidate failure always falls through to natural completion,
+ * which is exactly the scenario this defect is about.
+ */
+async function withOnlyNvidiaConfigured<T>(fn: () => Promise<T>): Promise<T> {
+  const others = CONFIGURED_FOR_TEST.filter((n) => n !== "NVIDIA_API_KEY");
+  const saved: Record<string, string | undefined> = {};
+  for (const name of others) {
+    saved[name] = process.env[name];
+    delete process.env[name];
+  }
+  try {
+    return await fn();
+  } finally {
+    for (const name of others) {
+      if (saved[name] === undefined) delete process.env[name];
+      else process.env[name] = saved[name];
+    }
+  }
+}
+
+test("D4.4.1: final (only) candidate times out with ~no shared budget left -> classified as RouterDeadlineExceededError, not generic failure", async () =>
+  withOnlyNvidiaConfigured(async () => {
+    resetAllBreakers();
+    let calls = 0;
+    const originalFetch = global.fetch;
+    // Never resolves on its own — only the propagated AbortSignal ends it,
+    // so elapsed time always equals exactly the per-attempt cap, same
+    // technique as the existing D4.3-A tests.
+    global.fetch = ((_url: string, init: any) =>
+      new Promise((_resolve, reject) => {
+        calls += 1;
+        init?.signal?.addEventListener("abort", () => {
+          const err = new Error("The operation was aborted");
+          err.name = "TimeoutError";
+          reject(err);
+        });
+      })) as any;
+
+    try {
+      // Exactly one candidate (nvidia). deadlineMs=100 -> its cap =
+      // 100*0.6=60ms (the "first attempt" share formula applies regardless
+      // of also being the last). After it fails, the loop increments i to
+      // 1; candidates.length is 1, so the loop condition (i < length) is
+      // false and the loop ends by natural completion — there is no second
+      // iteration to possibly skip, so stoppedDueToDeadline is guaranteed
+      // false here, by construction, not by luck. Remaining budget at the
+      // tail is ~40ms, below the 50ms floor.
+      const err: any = await routeText(freshCtx({ deadlineMs: 100 }), {
+        prompt: "hi",
+        preferredProvider: "nvidia",
+      }).catch((e) => e);
+
+      assert.equal(calls, 1, "the only configured candidate should have been attempted exactly once");
+      assert.equal(
+        err?.code,
+        "router_deadline_exceeded",
+        `expected the deadline-starved final attempt to be classified as router_deadline_exceeded, got code=${err?.code}, message=${err?.message}`
+      );
+    } finally {
+      global.fetch = originalFetch;
+    }
+  }));
+
+test("D4.4.1: final candidate's own provider-side timeout with plenty of shared budget left stays a generic failure, not a false 504", async () => {
+  resetAllBreakers();
+  // All 4 of this suite's normally-configured providers are left
+  // configured here deliberately: every one rejects near-instantly (not via
+  // the abort signal) with a timeout-shaped error, simulating providers
+  // that are themselves slow/unresponsive -- NOT a case where the shared
+  // deadline ran out. The loop exhausts all 4 naturally in well under a
+  // millisecond of real elapsed time, so ~12000ms of the 12000ms budget is
+  // still left when the tail classification runs. The adapter still tags
+  // the last failure "provider_timeout" (it can't distinguish the two
+  // causes on its own); the router must use the remaining budget, not just
+  // the code, to avoid a false positive here.
+  const originalFetch = global.fetch;
+  global.fetch = (async () => {
+    const err: any = new Error("simulated provider-side hang");
+    err.name = "TimeoutError";
+    throw err;
+  }) as any;
+
+  try {
+    const err: any = await routeText(freshCtx({ deadlineMs: 12000 }), {
+      prompt: "hi",
+      preferredProvider: "nvidia",
+    }).catch((e) => e);
+
+    assert.notEqual(
+      err?.code,
+      "router_deadline_exceeded",
+      "a provider's own timeout with ample shared budget remaining must not be misclassified as router deadline exhaustion"
+    );
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("D4.4.1 (JSON path): final (only) candidate times out with ~no shared budget left -> same classification as routeText", async () =>
+  withOnlyNvidiaConfigured(async () => {
+    resetAllBreakers();
+    const originalFetch = global.fetch;
+    global.fetch = ((_url: string, init: any) =>
+      new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => {
+          const err = new Error("The operation was aborted");
+          err.name = "TimeoutError";
+          reject(err);
+        });
+      })) as any;
+
+    try {
+      const err: any = await routeJson(freshCtx({ deadlineMs: 100 }), {
+        prompt: "hi",
+        preferredProvider: "nvidia",
+        responseSchema: { type: "object" },
+      }).catch((e) => e);
+
+      assert.equal(err?.code, "router_deadline_exceeded");
+    } finally {
+      global.fetch = originalFetch;
+    }
+  }));
