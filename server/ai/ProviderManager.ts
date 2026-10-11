@@ -63,9 +63,9 @@ export const PROVIDER_REGISTRY: Record<ServerProviderName, ProviderMetadata> = {
   nvidia: {
     provider: "nvidia",
     displayName: "NVIDIA NIM",
-    defaultModel: "meta/llama-3.1-8b-instruct",
+    defaultModel: "meta/llama-3.3-70b-instruct",
     availableModels: [
-      "meta/llama-3.1-8b-instruct",
+      "meta/llama-3.3-70b-instruct",
       "meta/llama-3.1-70b-instruct",
       "mistralai/mixtral-8x7b-instruct-v0.1",
     ],

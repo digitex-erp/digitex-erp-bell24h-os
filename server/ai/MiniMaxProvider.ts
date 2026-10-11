@@ -23,8 +23,11 @@ export async function generateText(req: TextRequest): Promise<ProviderResult<str
   const model = req.model ?? DEFAULT_MODEL;
   const startedAt = Date.now();
 
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  // D4.3-A: a router-supplied signal (bounded by the shared request deadline)
+  // takes precedence over this adapter's own fixed timeout. Direct/internal
+  // callers that bypass the router (no signal supplied) keep today's behavior.
+  const controller = req.signal ? undefined : new AbortController();
+  const timeoutId = controller ? setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS) : undefined;
 
   const messages: Array<{ role: string; content: string }> = [];
   if (req.systemPrompt) {
@@ -45,7 +48,7 @@ export async function generateText(req: TextRequest): Promise<ProviderResult<str
         temperature: req.temperature ?? 0.7,
         max_tokens: req.maxTokens ?? 2048,
       }),
-      signal: controller.signal,
+      signal: req.signal ?? controller!.signal,
     });
 
     const data: any = await response.json().catch(() => null);
@@ -74,12 +77,18 @@ export async function generateText(req: TextRequest): Promise<ProviderResult<str
         : undefined,
     };
   } catch (err: any) {
-    if (err?.name === "AbortError") {
-      throw new Error("MiniMax request timed out.");
+    // AbortSignal.timeout() (router-supplied, D4.3-A) rejects as "TimeoutError";
+    // a manually-aborted local AbortController rejects as "AbortError" — both
+    // mean the same thing here: the request didn't finish in time.
+    if (err?.name === "AbortError" || err?.name === "TimeoutError") {
+      // D4.4.1: structured code, same reasoning as NvidiaProvider.ts.
+      const timeoutErr: Error & { code?: string } = new Error("MiniMax request timed out.");
+      timeoutErr.code = "provider_timeout";
+      throw timeoutErr;
     }
     throw err;
   } finally {
-    clearTimeout(timeoutId);
+    if (timeoutId) clearTimeout(timeoutId);
   }
 }
 

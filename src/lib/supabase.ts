@@ -88,10 +88,25 @@ if (!SUPABASE_CONFIGURED) {
   console.warn("Supabase is NOT configured or has an invalid URL. Using placeholders to prevent crash.");
 }
 
-console.log("[Runtime] Supabase Client Initialized:", { 
+console.log("[Runtime] Supabase Client Initialized:", {
   projectId: supabaseProjectId,
   configured: SUPABASE_CONFIGURED,
   isRecovered: finalUrl !== rawUrl
 });
+
+// Captured before createClient() below constructs the client and triggers
+// _initialize() -> _getSessionFromURL(), which (for the default implicit flow)
+// clears window.location.hash as soon as it extracts the session. This is the
+// only point in the app guaranteed to see the URL exactly as the email link
+// delivered it. Presence only (parameter NAMES) — never the token values, never
+// persisted to localStorage, never logged.
+const initialUrlPasswordRecovery = (() => {
+  if (typeof window === 'undefined') return false;
+  const params = new URLSearchParams(window.location.search);
+  const hash = new URLSearchParams(window.location.hash.substring(1));
+  return params.get('type') === 'recovery' || hash.get('type') === 'recovery' || params.has('code');
+})();
+
+export const isInitialUrlPasswordRecovery = initialUrlPasswordRecovery;
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);

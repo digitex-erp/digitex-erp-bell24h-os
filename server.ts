@@ -30,6 +30,20 @@ import { WorkerRegistry } from "./server/workers/WorkerRegistry.js";
 import { WorkerSupervisor } from "./server/workers/WorkerSupervisor.js";
 import { seoRoutes } from "./server/routes/seoRoutes.js";
 import { registerCommunicationRoutes } from "./server/communication/routes.js";
+import { requireAnyRole } from "./server/communication/rbac.js";
+
+// pg's ConnectionParameters merges parse(connectionString) over the explicit `ssl`
+// option passed to `new Pool()` (pg/lib/connection-parameters.js: `config =
+// Object.assign({}, config, parse(config.connectionString))`), and pg-connection-string
+// sets `ssl: {}` whenever the connection string has an sslmode param — silently
+// discarding `rejectUnauthorized: false` below and restoring Node's default strict TLS
+// verification against Supabase's self-signed chain. Stripping only sslmode here lets
+// the explicit ssl option actually take effect.
+function stripSslModeFromDatabaseUrl(databaseUrl: string): string {
+  const url = new URL(databaseUrl);
+  url.searchParams.delete("sslmode");
+  return url.toString();
+}
 
 // OS-INTEGRATION-IMPLEMENTATION-01: extracted so a Vercel serverless entry point
 // (api/index.ts) can obtain the fully-configured Express app without also calling
@@ -97,6 +111,20 @@ export async function createApp() {
   // organizationId/userId passed to the router are fixed, non-client-supplied
   // constants identifying "VyaparSethu as a system" for budget/audit purposes only —
   // not a tenant mapping. See OS_INTEGRATION_DECISION_RECORD_V1.md Decisions A/B.
+  // D4.3-A: optional caller-supplied deadline override for the AI Router's
+  // shared fallback-cascade budget. Nothing sends this header yet — resolving
+  // it here is forward-compatible plumbing; an absent/invalid header falls
+  // through to the router's own env-var-backed default (ProviderRouter.ts).
+  // Validation (range, NaN/Infinity rejection) lives in one place —
+  // aiRouter.parseValidDeadlineMs — shared with the env-var default and
+  // RouterContext.deadlineMs so all three sources apply the identical rule.
+  const DEADLINE_HEADER = "x-bell24h-deadline-ms";
+  const resolveDeadlineMs = (req: express.Request): number | undefined => {
+    const header = req.headers[DEADLINE_HEADER];
+    const raw = Array.isArray(header) ? header[0] : header;
+    return aiRouter.parseValidDeadlineMs(raw);
+  };
+
   app.post("/api/v1/ai/text", requireServiceAuth, async (req, res) => {
     const { serviceCaller, requestId } = req as ServiceAuthedRequest;
     const { prompt, provider, policy, workflowType, temperature, maxTokens } = req.body ?? {};
@@ -128,6 +156,7 @@ export async function createApp() {
       organizationId: serviceCaller!.system,
       requestId: requestId!,
       action: "ai.s2s.generateText",
+      deadlineMs: resolveDeadlineMs(req),
     };
 
     try {
@@ -149,6 +178,15 @@ export async function createApp() {
       });
     } catch (err: any) {
       console.error("[Runtime] S2S AI text generation error:", err.message);
+      // D4.4: the shared request deadline (D4.3-A) running out — whether
+      // before any attempt or partway through the fallback cascade — is a
+      // distinct, retryable condition from a genuine "every provider failed
+      // on its own terms" outcome. Mapped to the existing TIMEOUT canonical
+      // code (defined but previously unused) and HTTP 504, not the generic
+      // 500 INTERNAL_ERROR this used to fall into.
+      if (err?.code === "router_deadline_exceeded") {
+        return sendError(res, 504, "TIMEOUT", requestId!, err.message);
+      }
       if (err?.code === "provider_credentials_unavailable") {
         return sendError(res, 503, "PROVIDER_UNAVAILABLE", requestId!, err.message);
       }
@@ -295,7 +333,7 @@ export async function createApp() {
         throw new Error("DATABASE_URL is not defined in environment variables.");
       }
       pool = new Pool({
-        connectionString: process.env.DATABASE_URL,
+        connectionString: stripSslModeFromDatabaseUrl(process.env.DATABASE_URL),
         ssl: { rejectUnauthorized: false },
         max: 20,
         idleTimeoutMillis: 30000,
@@ -407,7 +445,7 @@ export async function createApp() {
   // named as vault handlers needing tenant isolation) and are intentionally
   // NOT migrated to postgrestFetch() below; they remain on the pooled
   // connection because there is no RLS-respecting equivalent for them.
-  app.get("/api/check-table", requireAuth, async (req, res) => {
+  app.get("/api/check-table", requireAuth, requireAnyRole(getPool, ["ADMIN"], "diagnostics"), async (req, res) => {
     try {
       const dbPool = getPool();
       console.log("[Runtime] DB Connection attempt starting...");
@@ -419,7 +457,7 @@ export async function createApp() {
     }
   });
 
-  app.get("/api/check-users-count", requireAuth, async (req, res) => {
+  app.get("/api/check-users-count", requireAuth, requireAnyRole(getPool, ["ADMIN"], "diagnostics"), async (req, res) => {
     try {
       const dbPool = getPool();
       const result = await dbPool.query("SELECT count(*) FROM auth.users;");
@@ -715,7 +753,7 @@ async function startServer() {
     if (process.env.DATABASE_URL) {
       try {
         const pool = new Pool({
-          connectionString: process.env.DATABASE_URL,
+          connectionString: stripSslModeFromDatabaseUrl(process.env.DATABASE_URL),
           ssl: { rejectUnauthorized: false },
           max: 20,
         });

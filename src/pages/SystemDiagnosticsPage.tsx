@@ -6,6 +6,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { CheckCircle, XCircle, AlertTriangle, RefreshCw, Shield, ShieldCheck, Database, Server, Monitor, Zap, Search, Megaphone, Share2, Workflow, LineChart, Globe, Cpu, Activity, Lock, Fingerprint } from "lucide-react";
 import { supabase, SUPABASE_CONFIGURED, supabaseProjectId } from "@/lib/supabase";
 import { useAuthStore } from "@/store/useAuthStore";
+import { authedFetchJson } from "@/lib/authedFetch";
+import { diagnosticError } from "@/lib/diagnosticsErrors";
 
 export function SystemDiagnosticsPage() {
   const [serverEnv, setServerEnv] = useState<any>(null);
@@ -55,21 +57,19 @@ export function SystemDiagnosticsPage() {
 
   const fetchTableCheck = async () => {
     try {
-      const resp = await fetch('/api/check-table');
-      const data = await resp.json();
-      setTableCheck(data);
+      setTableCheck(await authedFetchJson<any>('/api/check-table'));
     } catch (e) {
-      console.error("Table check failed", e);
+      const o = diagnosticError(e);
+      setTableCheck({ error: o.message, warn: o.status === 'warn' });
     }
   };
 
   const fetchUserCount = async () => {
     try {
-      const resp = await fetch('/api/check-users-count');
-      const data = await resp.json();
-      setUserCount(data);
+      setUserCount(await authedFetchJson<any>('/api/check-users-count'));
     } catch (e) {
-      console.error("User count fetch failed", e);
+      const o = diagnosticError(e);
+      setUserCount({ error: o.message, warn: o.status === 'warn' });
     }
   };
 
@@ -363,9 +363,9 @@ export function SystemDiagnosticsPage() {
                 </TableRow>
                 <TableRow>
                   <TableCell className="font-medium text-amber-600">Direct DB Connection (Admin)</TableCell>
-                  <TableCell><StatusIcon status={tableCheck?.success ? 'pass' : (tableCheck?.error ? 'fail' : 'pending')} /></TableCell>
+                  <TableCell><StatusIcon status={tableCheck?.success ? 'pass' : (tableCheck?.error ? (tableCheck.warn ? 'warn' : 'fail') : 'pending')} /></TableCell>
                   <TableCell className="text-xs">
-                    {tableCheck?.success ? 'Verified: Admin connection stable' : (tableCheck?.error ? `Error: ${tableCheck.error}` : 'Testing direct DATABASE_URL...')}
+                    {tableCheck?.success ? 'Verified: server reached the database over DATABASE_URL' : (tableCheck?.error ? tableCheck.error : 'Testing direct DATABASE_URL...')}
                   </TableCell>
                 </TableRow>
                 <TableRow>

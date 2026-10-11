@@ -1,11 +1,11 @@
 import { useAuthStore, AUTH_BYPASS } from '@/store/useAuthStore';
-import { supabase } from '@/lib/supabase';
+import { supabase, isInitialUrlPasswordRecovery } from '@/lib/supabase';
 import { AuthService } from '@/modules/auth/AuthService';
 import { useEffect } from 'react';
 import type { User } from '@/store/useAuthStore';
 
 export function useAuth() {
-  const { user, isAuthenticated, isLoading, login, logout, setLoading } = useAuthStore();
+  const { user, isAuthenticated, isLoading, login, logout, setLoading, setPasswordRecovery } = useAuthStore();
 
   useEffect(() => {
     // TEMPORARY DEVELOPMENT AUTH BYPASS
@@ -21,6 +21,15 @@ export function useAuth() {
         if (error) {
           console.error("Auth Session Error:", error);
           logout();
+          setLoading(false);
+          return;
+        }
+
+        // A password-recovery session must not establish a normal application
+        // login — AuthPage.tsx owns this session for the update-password flow
+        // only (see App.tsx's AuthRedirect, which checks isPasswordRecovery).
+        if (isInitialUrlPasswordRecovery) {
+          setPasswordRecovery(true);
           setLoading(false);
           return;
         }
@@ -46,6 +55,12 @@ export function useAuth() {
     // Listener for auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       (event, session) => {
+        const recovering = event === 'PASSWORD_RECOVERY' || isInitialUrlPasswordRecovery;
+        setPasswordRecovery(recovering);
+        if (recovering) {
+          return;
+        }
+
         if (session?.user) {
           const sessionUser = session.user;
           AuthService.resolveRole(sessionUser.id).then((role) => {
@@ -61,9 +76,9 @@ export function useAuth() {
         }
       }
     );
-    
+
     return () => subscription.unsubscribe();
-  }, [login, logout, setLoading]);
+  }, [login, logout, setLoading, setPasswordRecovery]);
 
   return { user, isAuthenticated, isLoading, login, logout };
 }

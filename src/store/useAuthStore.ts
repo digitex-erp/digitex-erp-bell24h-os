@@ -11,9 +11,14 @@ interface AuthState {
   user: User | null;
   isAuthenticated: boolean;
   isLoading: boolean;
+  // A Supabase PASSWORD_RECOVERY session is intentionally kept separate from
+  // isAuthenticated: it must authorize only the /auth/update-password flow
+  // (see App.tsx's AuthRedirect), never a normal application login.
+  isPasswordRecovery: boolean;
   login: (user: User) => void;
   logout: () => void;
   setLoading: (loading: boolean) => void;
+  setPasswordRecovery: (value: boolean) => void;
 }
 
 // TEMPORARY DEVELOPMENT AUTH BYPASS
@@ -42,6 +47,7 @@ export const useAuthStore = create<AuthState>((set) => ({
   user: AUTH_BYPASS ? devUser : null,
   isAuthenticated: AUTH_BYPASS,
   isLoading: !AUTH_BYPASS,
+  isPasswordRecovery: false,
 
   login: (user) => {
     set({ user, isAuthenticated: true, isLoading: false });
@@ -56,5 +62,8 @@ export const useAuthStore = create<AuthState>((set) => ({
   },
   setLoading: (isLoading) => {
     set({ isLoading });
+  },
+  setPasswordRecovery: (isPasswordRecovery) => {
+    set({ isPasswordRecovery });
   },
 }));

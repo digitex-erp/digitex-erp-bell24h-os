@@ -16,7 +16,10 @@ import type {
 
 const NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1";
 
-export const DEFAULT_MODEL = "meta/llama-3.1-8b-instruct";
+// Overridable via NVIDIA_MODEL so a future NVIDIA model retirement needs only
+// an environment-variable change, not a redeploy. Falls back to the confirmed
+// live production model (proven via D2) if the env var is unset.
+export const DEFAULT_MODEL = process.env.NVIDIA_MODEL?.trim() || "z-ai/glm-5.3";
 
 const REQUEST_TIMEOUT_MS = 30_000;
 
@@ -26,8 +29,11 @@ export async function generateText(req: TextRequest): Promise<ProviderResult<str
   const model = req.model ?? DEFAULT_MODEL;
   const startedAt = Date.now();
 
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  // D4.3-A: a router-supplied signal (bounded by the shared request deadline)
+  // takes precedence over this adapter's own fixed timeout. Direct/internal
+  // callers that bypass the router (no signal supplied) keep today's behavior.
+  const controller = req.signal ? undefined : new AbortController();
+  const timeoutId = controller ? setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS) : undefined;
 
   const messages: Array<{ role: string; content: string }> = [];
   if (req.systemPrompt) {
@@ -49,15 +55,24 @@ export async function generateText(req: TextRequest): Promise<ProviderResult<str
         temperature: req.temperature ?? 0.7,
         max_tokens: req.maxTokens ?? 2048,
       }),
-      signal: controller.signal,
+      signal: req.signal ?? controller!.signal,
     });
   } catch (err: any) {
-    if (err?.name === "AbortError") {
-      throw new Error("NVIDIA request timed out.");
+    // AbortSignal.timeout() (router-supplied, D4.3-A) rejects as "TimeoutError";
+    // a manually-aborted local AbortController rejects as "AbortError" — both
+    // mean the same thing here: the request didn't finish in time.
+    if (err?.name === "AbortError" || err?.name === "TimeoutError") {
+      // D4.4.1: tagged with a structured code (not just message text) so the
+      // router can distinguish this from an ordinary upstream failure when
+      // deciding whether the shared deadline — not this provider alone — is
+      // the real cause of a final, naturally-exhausted cascade.
+      const timeoutErr: Error & { code?: string } = new Error("NVIDIA request timed out.");
+      timeoutErr.code = "provider_timeout";
+      throw timeoutErr;
     }
     throw new Error("NVIDIA request failed.");
   } finally {
-    clearTimeout(timeoutId);
+    if (timeoutId) clearTimeout(timeoutId);
   }
 
   const data: any = await response.json().catch(() => null);

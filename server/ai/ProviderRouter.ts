@@ -56,11 +56,98 @@ interface BudgetEntry {
 
 const budgetByOrg = new Map<string, BudgetEntry>();
 
+// ============================================================================
+// 1B. REQUEST DEADLINE (D4.3-A)
+// ============================================================================
+// Valid range for a deadline supplied by an external-facing source: the
+// inbound x-bell24h-deadline-ms header, or the AI_ROUTER_DEADLINE_MS
+// deployment config. Both represent a human/operator-chosen value, so both
+// are held to the same sane range and neither can let NaN, Infinity, zero,
+// negative, or an absurdly large value reach deadlineAt or
+// AbortSignal.timeout().
+export const MIN_DEADLINE_MS = 1000;
+export const MAX_DEADLINE_MS = 60000;
+
+/**
+ * Returns `raw` as a validated deadline (ms) if it is a finite number within
+ * [MIN_DEADLINE_MS, MAX_DEADLINE_MS]; otherwise returns undefined so the
+ * caller can fall through to its own default. Never throws. Use this for
+ * the header and the environment-variable default — not for
+ * RouterContext.deadlineMs (see sanitizeInternalDeadlineMs below).
+ */
+export function parseValidDeadlineMs(raw: unknown): number | undefined {
+  if (raw === undefined || raw === null || raw === "") return undefined;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return undefined;
+  if (parsed < MIN_DEADLINE_MS || parsed > MAX_DEADLINE_MS) return undefined;
+  return parsed;
+}
+
+/**
+ * Guards RouterContext.deadlineMs against the genuinely dangerous values
+ * (NaN, Infinity, zero, negative — anything that would break deadlineAt's
+ * arithmetic or make AbortSignal.timeout() throw), without imposing
+ * MIN_DEADLINE_MS/MAX_DEADLINE_MS. Those bounds exist to keep an external
+ * caller's header (or a misconfigured deployment's env var) within a sane
+ * human-chosen range; ctx.deadlineMs is an internal field — server.ts
+ * already runs the header through parseValidDeadlineMs before ever
+ * assigning it here, and a direct/internal/test caller may legitimately
+ * want a deadline shorter than MIN_DEADLINE_MS (e.g. to exercise the
+ * exhaustion path deterministically, as this module's own tests do).
+ */
+function sanitizeInternalDeadlineMs(raw: unknown): number | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return undefined;
+  return parsed;
+}
+
+// 12,000ms is derived from VyaparSethu's current 15,000ms SDK timeout
+// (its own AbortSignal.timeout(15000), see client.ts) — leaving ~3s margin
+// for S2S auth, body validation, and the response trip back to the caller.
+// This is a stopgap default until callers send their own deadline via the
+// x-bell24h-deadline-ms header (see server.ts's resolution of that header
+// for the /api/v1/ai/text route); RouterContext.deadlineMs, when supplied
+// AND valid, always takes precedence over this constant. An invalid
+// AI_ROUTER_DEADLINE_MS (unset, non-numeric, NaN, infinite, zero, negative,
+// or out of range) safely falls back to the 12,000ms literal below.
+export const DEFAULT_ROUTER_DEADLINE_MS = parseValidDeadlineMs(process.env.AI_ROUTER_DEADLINE_MS) ?? 12000;
+
+// Below this much remaining budget, no further candidate is attempted —
+// matches the floor used by server.ts's own header validation reasoning.
+const MIN_REMAINING_BUDGET_MS = 50;
+
+// The first attempted candidate gets a larger, explicit share of the budget
+// rather than an equal split with however many candidates remain: an equal
+// split (e.g. 1/5 of 12s = 2,400ms) would be shorter than the one real
+// observed production success (NVIDIA, 3,176ms per D2), which would make
+// the only proven-healthy path unreachable under its own deadline. Every
+// candidate after the first falls back to an even split of whatever budget
+// is left at that point, recomputed fresh each iteration.
+const FIRST_ATTEMPT_BUDGET_SHARE = 0.6;
+
 export class BudgetExceededError extends Error {
   readonly code = "ai_budget_exceeded";
   constructor(public readonly limit: number) {
     super(`Organization AI request budget exceeded (${limit} requests per 24h).`);
     this.name = "BudgetExceededError";
+  }
+}
+
+/**
+ * D4.4: thrown when the shared request deadline (D4.3-A) is the reason the
+ * fallback cascade stopped — whether zero attempts were made (deadline
+ * already gone at router entry) or some were made and the deadline ran out
+ * before a remaining candidate could be tried. Distinct from a genuine
+ * provider failure (every candidate was actually attempted and failed on
+ * its own terms, loop exhausted naturally) — server.ts maps this to the
+ * canonical TIMEOUT code / HTTP 504, not INTERNAL_ERROR.
+ */
+export class RouterDeadlineExceededError extends Error {
+  readonly code = "router_deadline_exceeded";
+  constructor(message: string) {
+    super(message);
+    this.name = "RouterDeadlineExceededError";
   }
 }
 
@@ -284,6 +371,54 @@ export function getTelemetrySummary(): {
 }
 
 // ============================================================================
+// 4B. PER-ATTEMPT BUDGET (D4.3-A)
+// ============================================================================
+
+/**
+ * Computes this attempt's own timeout cap: the first attempt gets
+ * FIRST_ATTEMPT_BUDGET_SHARE of whatever remains; every later attempt gets
+ * an even split across however many candidates are still untried. Always
+ * bounded above by the provider's own configured timeout. Returns null when
+ * the remaining budget is already at or below the floor, signaling that no
+ * further candidate should be attempted.
+ */
+export function computePerAttemptCapMs(
+  provider: ServerProviderName,
+  attemptIndex: number,
+  remainingCandidateCount: number,
+  remainingBudgetMs: number
+): number | null {
+  if (remainingBudgetMs <= MIN_REMAINING_BUDGET_MS) {
+    return null;
+  }
+  const providerTimeoutMs = manager.PROVIDER_REGISTRY[provider].timeoutMs;
+  const share =
+    attemptIndex === 0
+      ? remainingBudgetMs * FIRST_ATTEMPT_BUDGET_SHARE
+      : remainingBudgetMs / remainingCandidateCount;
+  return Math.max(1, Math.min(providerTimeoutMs, Math.round(share)));
+}
+
+/**
+ * D4.4.1: after the loop completes naturally — every configured candidate
+ * was actually attempted, stoppedDueToDeadline is false — the final failure
+ * can still be the shared deadline's fault rather than an independent
+ * provider failure. That is true only when BOTH hold: the last attempt's
+ * own error is a structurally-tagged provider timeout (set by the adapters
+ * when their AbortSignal fires — never inferred from message text), AND
+ * there is no meaningful shared budget left at the moment the loop ends.
+ * Checking both — not the code alone — is what keeps an ordinary
+ * provider-side timeout that happens to occur while plenty of shared budget
+ * remains from being misclassified as a router deadline exhaustion.
+ */
+function isFinalAttemptDeadlineCaused(lastError: unknown, deadlineAt: number): boolean {
+  return (
+    (lastError as { code?: string } | null)?.code === "provider_timeout" &&
+    deadlineAt - Date.now() <= MIN_REMAINING_BUDGET_MS
+  );
+}
+
+// ============================================================================
 // 5. DISPATCH EXECUTION ENGINE
 // ============================================================================
 
@@ -332,6 +467,22 @@ async function executeProviderJson<T>(
 }
 
 /**
+ * D4.4: "no configured provider at all" is semantically the same class of
+ * issue as a single provider's own missing-credential case (already mapped
+ * to 503 PROVIDER_UNAVAILABLE in server.ts) — reusing that existing code
+ * here avoids introducing a fourth HTTP status/code pairing for what is,
+ * from the caller's perspective, the same outcome: nothing is usable right
+ * now.
+ */
+function createNoProvidersError(): Error {
+  const err: Error & { code?: string } = new Error(
+    "No operational AI providers available in current environment."
+  );
+  err.code = "provider_credentials_unavailable";
+  return err;
+}
+
+/**
  * Executes a text or JSON completion through the multi-provider routing policy.
  * Seamlessly handles failover to secondary providers on upstream failure.
  */
@@ -345,16 +496,43 @@ export async function routeText(
   const candidates = getCandidateProviders(policy, opts.preferredProvider);
 
   if (candidates.length === 0) {
-    throw new Error("No operational AI providers available in current environment.");
+    throw createNoProvidersError();
   }
+
+  const deadlineMs = sanitizeInternalDeadlineMs(ctx.deadlineMs) ?? DEFAULT_ROUTER_DEADLINE_MS;
+  const deadlineAt = Date.now() + deadlineMs;
 
   let lastError: any = null;
   let fallbackFrom: ServerProviderName | undefined;
+  let attemptsMade = 0;
+  let stoppedDueToDeadline = false;
 
-  for (const provider of candidates) {
+  for (let i = 0; i < candidates.length; i++) {
+    const provider = candidates[i];
+    const perAttemptCapMs = computePerAttemptCapMs(
+      provider,
+      i,
+      candidates.length - i,
+      deadlineAt - Date.now()
+    );
+    if (perAttemptCapMs === null) {
+      stoppedDueToDeadline = true;
+      break; // deadline exceeded; no further candidates attempted
+    }
+    const signal = AbortSignal.timeout(perAttemptCapMs);
+
     const startedAt = Date.now();
+    attemptsMade++;
     try {
-      const result = await executeProviderText(provider, opts);
+      const result = await executeProviderText(provider, { ...opts, signal });
+      // D4.4: a 200/OK response with no usable text is not a success — reject
+      // it here so it falls into the same catch block as any other provider
+      // failure, letting the existing fallback loop (still bounded by the
+      // shared deadline) try the next candidate instead of returning empty
+      // content as if it were a real answer.
+      if (typeof result.data !== "string" || result.data.trim().length === 0) {
+        throw new Error(`Provider "${provider}" returned empty or invalid text content.`);
+      }
       recordBreakerSuccess(provider);
 
       const record: TelemetryRecord = {
@@ -440,6 +618,14 @@ export async function routeText(
     }
   }
 
+  if (stoppedDueToDeadline || isFinalAttemptDeadlineCaused(lastError, deadlineAt)) {
+    throw new RouterDeadlineExceededError(
+      attemptsMade === 0
+        ? "Request deadline exceeded before any provider could be attempted."
+        : `Request deadline exceeded after ${attemptsMade} provider attempt(s) for policy "${policy}". Last error: ${lastError?.message ?? "none"}.`
+    );
+  }
+
   throw new Error(
     `All available AI providers failed for policy "${policy}". Last error: ${lastError?.message}`
   );
@@ -455,16 +641,35 @@ export async function routeJson<T>(
   const candidates = getCandidateProviders(policy, opts.preferredProvider);
 
   if (candidates.length === 0) {
-    throw new Error("No operational AI providers available in current environment.");
+    throw createNoProvidersError();
   }
+
+  const deadlineMs = sanitizeInternalDeadlineMs(ctx.deadlineMs) ?? DEFAULT_ROUTER_DEADLINE_MS;
+  const deadlineAt = Date.now() + deadlineMs;
 
   let lastError: any = null;
   let fallbackFrom: ServerProviderName | undefined;
+  let attemptsMade = 0;
+  let stoppedDueToDeadline = false;
 
-  for (const provider of candidates) {
+  for (let i = 0; i < candidates.length; i++) {
+    const provider = candidates[i];
+    const perAttemptCapMs = computePerAttemptCapMs(
+      provider,
+      i,
+      candidates.length - i,
+      deadlineAt - Date.now()
+    );
+    if (perAttemptCapMs === null) {
+      stoppedDueToDeadline = true;
+      break; // deadline exceeded; no further candidates attempted
+    }
+    const signal = AbortSignal.timeout(perAttemptCapMs);
+
     const startedAt = Date.now();
+    attemptsMade++;
     try {
-      const result = await executeProviderJson<T>(provider, opts);
+      const result = await executeProviderJson<T>(provider, { ...opts, signal });
       recordBreakerSuccess(provider);
 
       const record: TelemetryRecord = {
@@ -529,6 +734,14 @@ export async function routeJson<T>(
         throw err;
       }
     }
+  }
+
+  if (stoppedDueToDeadline || isFinalAttemptDeadlineCaused(lastError, deadlineAt)) {
+    throw new RouterDeadlineExceededError(
+      attemptsMade === 0
+        ? "Request deadline exceeded before any provider could be attempted."
+        : `Request deadline exceeded after ${attemptsMade} provider attempt(s) for JSON request. Last error: ${lastError?.message ?? "none"}.`
+    );
   }
 
   throw new Error(
