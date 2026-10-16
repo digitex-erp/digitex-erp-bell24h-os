@@ -11,6 +11,7 @@ import { QueueJob, JobType } from "../queue/QueueTypes.js";
 import { AIJobHandler } from "./handlers/AIJobHandler.js";
 import { MediaJobHandler } from "./handlers/MediaJobHandler.js";
 import { PublishingJobHandler } from "./handlers/PublishingJobHandler.js";
+import { CommunicationJobHandler } from "./handlers/CommunicationJobHandler.js";
 import { emitAuditEvent } from "../audit.js";
 
 export interface WorkerOptions {
@@ -45,6 +46,7 @@ export class WorkerRegistry {
   private aiHandler: AIJobHandler;
   private mediaHandler: MediaJobHandler;
   private publishingHandler: PublishingJobHandler;
+  private communicationHandler: CommunicationJobHandler;
 
   constructor(pool: pg.Pool, queueManager: QueueManager, options: WorkerOptions = {}) {
     this.pool = pool;
@@ -67,11 +69,13 @@ export class WorkerRegistry {
       "social",
       "analytics",
       "automation",
+      "communication",
     ];
 
     this.aiHandler = new AIJobHandler(pool);
     this.mediaHandler = new MediaJobHandler(pool, queueManager);
     this.publishingHandler = new PublishingJobHandler(pool);
+    this.communicationHandler = new CommunicationJobHandler(pool);
   }
 
   public static getInstance(pool?: pg.Pool, queueManager?: QueueManager, options?: WorkerOptions): WorkerRegistry {
@@ -260,8 +264,11 @@ export class WorkerRegistry {
 
   /**
    * Dispatches and monitors execution for an individual claimed task.
+   * Returns the outcome rather than swallowing it, so a bounded caller (e.g.
+   * processBatch()) can report accurate per-job results instead of assuming
+   * every awaited call succeeded.
    */
-  private async executeJob(job: QueueJob): Promise<void> {
+  private async executeJob(job: QueueJob): Promise<{ outcome: "completed" | "failed"; error?: string }> {
     const startedAt = Date.now();
     console.log(`[WorkerRegistry] Executing job ${job.id} (type: ${job.job_type}, priority: ${job.priority})`);
 
@@ -288,6 +295,10 @@ export class WorkerRegistry {
           result = await this.publishingHandler.handle(job);
           break;
 
+        case "communication":
+          result = await this.communicationHandler.handle(job);
+          break;
+
         default:
           throw new Error(`No worker handler registered for job type: ${job.job_type}`);
       }
@@ -299,6 +310,7 @@ export class WorkerRegistry {
       });
 
       console.log(`[WorkerRegistry] Job ${job.id} completed in ${Date.now() - startedAt}ms`);
+      return { outcome: "completed" };
     } catch (err: any) {
       console.error(`[WorkerRegistry] Job ${job.id} failed:`, err.message);
       await this.queueManager.failJob({
@@ -307,7 +319,75 @@ export class WorkerRegistry {
         error: err,
         isTerminal: false,
       });
+      return { outcome: "failed", error: err.message };
     }
+  }
+
+  /**
+   * Serverless-safe alternative to start()/pollAndExecute(): claims and fully
+   * processes one bounded batch of jobs, then returns — no setInterval, no
+   * setTimeout poll loop, nothing left running after this promise resolves.
+   * Modeled on WorkerSupervisor.runReaperTick(), the pattern this exact
+   * codebase already uses for the same serverless constraint (a Vercel
+   * function does not survive after it returns its response, so start()'s
+   * persistent timers are dead code in that environment — see
+   * docs/project/BELL24H_OS_RUNTIME_REALITY_CERTIFICATION.md §2).
+   *
+   * Every claimed job is awaited before this method returns (unlike
+   * pollAndExecute()'s fire-and-forget `executeJob(job).finally(...)`, which
+   * is only safe in a long-running process that stays alive to let those
+   * promises finish on their own schedule).
+   *
+   * Intended caller: a cron-triggered route (server.ts, /api/v1/workers/tick),
+   * not the continuous poll loop used by start().
+   */
+  async processBatch(maxJobs: number = this.concurrencyLimit): Promise<{
+    claimedCount: number;
+    completedCount: number;
+    failedCount: number;
+    jobResults: Array<{ jobId: string; jobType: string; outcome: "completed" | "failed"; error?: string }>;
+  }> {
+    await this.registerWorker();
+
+    let claimedJobs: QueueJob[] = [];
+    try {
+      claimedJobs = await this.queueManager.claimJobs({
+        workerId: this.workerId,
+        supportedTypes: this.supportedTypes,
+        batchSize: maxJobs,
+        lockDurationMs: 300000,
+        maxConcurrentPerTenant: this.maxConcurrentPerTenant,
+      });
+    } catch (err: any) {
+      console.error(`[WorkerRegistry] processBatch: failed claiming jobs:`, err.message);
+      return { claimedCount: 0, completedCount: 0, failedCount: 0, jobResults: [] };
+    }
+
+    const jobResults: Array<{ jobId: string; jobType: string; outcome: "completed" | "failed"; error?: string }> = [];
+
+    if (claimedJobs.length > 0) {
+      console.log(`[WorkerRegistry] processBatch: claimed ${claimedJobs.length} jobs on worker ${this.workerId}`);
+      await this.updateWorkerStatus("processing");
+
+      await Promise.all(
+        claimedJobs.map(async (job) => {
+          this.activeJobs.add(job.id);
+          try {
+            const { outcome, error } = await this.executeJob(job);
+            jobResults.push({ jobId: job.id, jobType: job.job_type, outcome, error });
+          } finally {
+            this.activeJobs.delete(job.id);
+          }
+        })
+      );
+
+      await this.updateWorkerStatus("idle");
+    }
+
+    const completedCount = jobResults.filter((r) => r.outcome === "completed").length;
+    const failedCount = jobResults.filter((r) => r.outcome === "failed").length;
+
+    return { claimedCount: claimedJobs.length, completedCount, failedCount, jobResults };
   }
 
   private setupProcessSignals(): void {
