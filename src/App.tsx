@@ -37,6 +37,7 @@ import { SystemDiagnosticsPage } from "@/pages/SystemDiagnosticsPage";
 import { KnowledgeVaultPage } from "@/pages/KnowledgeVaultPage";
 import { IndustryDashboardPage } from "@/pages/IndustryDashboardPage";
 import { CommunicationsPage } from "@/pages/CommunicationsPage";
+import { VoiceStudioPage } from "@/pages/VoiceStudioPage";
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
@@ -120,6 +121,7 @@ export default function App() {
               service (IndustryIntelligenceService) is real. */}
           <Route path="industry-dashboard" element={<IndustryDashboardPage />} />
           <Route path="communications" element={<CommunicationsPage />} />
+          <Route path="voice-studio" element={<VoiceStudioPage />} />
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Route>
         <Route path="*" element={<Navigate to="/dashboard" replace />} />

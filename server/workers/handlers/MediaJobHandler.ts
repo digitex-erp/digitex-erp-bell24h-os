@@ -68,135 +68,73 @@ export class MediaJobHandler {
   private async processImageJob(job: QueueJob<MediaJobPayload>, requestId: string): Promise<any> {
     const { payload, organization_id, id: jobId } = job;
 
-    // Simulate external GPU rendering pipeline latency (e.g. 500ms)
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    // Stage A (honest failure): no real image-generation provider is wired to
+    // Image Studio yet. This previously simulated a GPU rendering delay and
+    // fabricated a success row pointing at an asset that was never created.
+    // Stage B (real provider integration, e.g. Flux/SDXL) is tracked separately —
+    // see docs/project/BELL24H_OS_P0_REMEDIATION_IMPLEMENTATION_PLAN.md Phase 2.
+    const errorMessage =
+      "PROVIDER_NOT_CONFIGURED: no image-generation provider is wired to Image Studio yet.";
 
-    const assetUrl = `https://storage.bell24h.com/image_assets/${job.organization_id}/${jobId}_render.webp`;
-
-    // 1. Update image_jobs table
     if (payload.job_id) {
       await this.pool.query(
         `
         UPDATE public.image_jobs
-        SET status = 'completed', completed_at = NOW()
+        SET status = 'failed', error_message = $3, completed_at = NOW()
         WHERE id = $1 AND organization_id = $2;
         `,
-        [payload.job_id, organization_id]
-      );
-    }
-
-    // 2. Insert into image_assets table
-    if (payload.project_id) {
-      await this.pool.query(
-        `
-        INSERT INTO public.image_assets (
-          job_id,
-          project_id,
-          asset_url,
-          prompt,
-          negative_prompt,
-          provider,
-          model,
-          resolution,
-          organization_id,
-          created_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW());
-        `,
-        [
-          payload.job_id || jobId,
-          payload.project_id,
-          assetUrl,
-          payload.prompt,
-          payload.negative_prompt || null,
-          payload.providerId || "flux",
-          payload.model || "flux-1-schnell",
-          payload.aspect_ratio || "1:1",
-          organization_id,
-        ]
+        [payload.job_id, organization_id, errorMessage]
       );
     }
 
     emitAuditEvent({
       actor: "service:worker",
       organizationId: organization_id,
-      action: "job.media.image_completed",
+      action: "job.media.image_failed",
       targetType: "job_queue",
       targetId: jobId,
-      outcome: "success",
+      outcome: "failure",
       requestId,
-      metadata: { assetUrl, model: payload.model },
+      metadata: { reason: "PROVIDER_NOT_CONFIGURED", model: payload.model },
     });
 
-    return { assetUrl, status: "completed" };
+    throw new Error(errorMessage);
   }
 
   private async processVideoJob(job: QueueJob<MediaJobPayload>, requestId: string): Promise<any> {
     const { payload, organization_id, id: jobId } = job;
 
-    // Simulate external video rendering pipeline latency
-    await new Promise((resolve) => setTimeout(resolve, 800));
+    // Stage A (honest failure): no real video-generation provider is wired to
+    // Video Factory yet. This previously simulated a rendering delay and
+    // fabricated a success row (asset + thumbnail URLs) pointing at files that
+    // were never created. Stage B (real provider integration, e.g. OpenSora) is
+    // tracked separately — see
+    // docs/project/BELL24H_OS_P0_REMEDIATION_IMPLEMENTATION_PLAN.md Phase 2.
+    const errorMessage =
+      "PROVIDER_NOT_CONFIGURED: no video-generation provider is wired to Video Factory yet.";
 
-    const assetUrl = `https://storage.bell24h.com/video_assets/${job.organization_id}/${jobId}_master.mp4`;
-    const thumbnailUrl = `https://storage.bell24h.com/video_assets/${job.organization_id}/${jobId}_thumb.webp`;
-
-    // 1. Update video_jobs table
     if (payload.job_id) {
       await this.pool.query(
         `
         UPDATE public.video_jobs
-        SET status = 'completed', completed_at = NOW()
+        SET status = 'failed', error_message = $3, completed_at = NOW()
         WHERE id = $1 AND organization_id = $2;
         `,
-        [payload.job_id, organization_id]
-      );
-    }
-
-    // 2. Insert into video_assets table
-    if (payload.project_id) {
-      await this.pool.query(
-        `
-        INSERT INTO public.video_assets (
-          job_id,
-          project_id,
-          asset_url,
-          thumbnail_url,
-          video_type,
-          prompt,
-          provider,
-          model,
-          resolution,
-          duration,
-          organization_id,
-          created_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW());
-        `,
-        [
-          payload.job_id || jobId,
-          payload.project_id,
-          assetUrl,
-          thumbnailUrl,
-          payload.video_type || "reel",
-          payload.prompt,
-          payload.providerId || "opensora",
-          payload.model || "opensora-1.2",
-          payload.quality || "1080p",
-          payload.duration || "15s",
-          organization_id,
-        ]
+        [payload.job_id, organization_id, errorMessage]
       );
     }
 
     emitAuditEvent({
       actor: "service:worker",
       organizationId: organization_id,
-      action: "job.media.video_completed",
+      action: "job.media.video_failed",
       targetType: "job_queue",
       targetId: jobId,
-      outcome: "success",
+      outcome: "failure",
       requestId,
-      metadata: { assetUrl, duration: payload.duration },
+      metadata: { reason: "PROVIDER_NOT_CONFIGURED", duration: payload.duration },
     });
 
-    return { assetUrl, thumbnailUrl, status: "completed" };
+    throw new Error(errorMessage);
   }
 }
