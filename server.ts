@@ -31,6 +31,7 @@ import { WorkerSupervisor } from "./server/workers/WorkerSupervisor.js";
 import { seoRoutes } from "./server/routes/seoRoutes.js";
 import { registerCommunicationRoutes } from "./server/communication/routes.js";
 import { requireAnyRole } from "./server/communication/rbac.js";
+import { registerVoiceRoutes } from "./server/voice/routes.js";
 
 // pg's ConnectionParameters merges parse(connectionString) over the explicit `ssl`
 // option passed to `new Pool()` (pg/lib/connection-parameters.js: `config =
@@ -395,6 +396,10 @@ export async function createApp() {
   // requireAuth -> role check (server/communication/rbac.ts) -> rate limit -> handler,
   // with input validation, idempotency keys and per-org quotas (Sprint C0 hardening).
   registerCommunicationRoutes(app, { getPool, authenticate: requireAuth });
+
+  // Voice Studio — Shogo migration Batch 1. Same contract shape as
+  // Communication Hub above: requireAuth -> role check -> handler.
+  registerVoiceRoutes(app, { getPool, authenticate: requireAuth });
 
   const getWorkerRegistry = () => WorkerRegistry.getInstance(getPool(), getQueueManager());
   const getWorkerSupervisor = () => WorkerSupervisor.getInstance(getPool(), getQueueManager());

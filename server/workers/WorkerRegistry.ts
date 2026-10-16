@@ -12,6 +12,7 @@ import { AIJobHandler } from "./handlers/AIJobHandler.js";
 import { MediaJobHandler } from "./handlers/MediaJobHandler.js";
 import { PublishingJobHandler } from "./handlers/PublishingJobHandler.js";
 import { CommunicationJobHandler } from "./handlers/CommunicationJobHandler.js";
+import { VoiceJobHandler } from "./handlers/VoiceJobHandler.js";
 import { emitAuditEvent } from "../audit.js";
 
 export interface WorkerOptions {
@@ -47,6 +48,7 @@ export class WorkerRegistry {
   private mediaHandler: MediaJobHandler;
   private publishingHandler: PublishingJobHandler;
   private communicationHandler: CommunicationJobHandler;
+  private voiceHandler: VoiceJobHandler;
 
   constructor(pool: pg.Pool, queueManager: QueueManager, options: WorkerOptions = {}) {
     this.pool = pool;
@@ -76,6 +78,7 @@ export class WorkerRegistry {
     this.mediaHandler = new MediaJobHandler(pool, queueManager);
     this.publishingHandler = new PublishingJobHandler(pool);
     this.communicationHandler = new CommunicationJobHandler(pool);
+    this.voiceHandler = new VoiceJobHandler(pool);
   }
 
   public static getInstance(pool?: pg.Pool, queueManager?: QueueManager, options?: WorkerOptions): WorkerRegistry {
@@ -286,8 +289,15 @@ export class WorkerRegistry {
 
         case "image":
         case "video":
-        case "voice":
           result = await this.mediaHandler.handle(job, this.workerId);
+          break;
+
+        case "voice":
+          // Previously routed to mediaHandler, which has no 'voice' case and
+          // would throw "Unsupported media job type: voice" -- 'voice' was a
+          // reserved JobType with no real handler until this batch (Shogo
+          // Voice Studio migration).
+          result = await this.voiceHandler.handle(job);
           break;
 
         case "publishing":
