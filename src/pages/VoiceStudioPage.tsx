@@ -783,18 +783,20 @@ export function VoiceStudioPage() {
                   <CardHeader className="flex flex-row items-center justify-between">
                     <div>
                       <CardTitle className="text-base">{isNewScript ? "New script (draft)" : draft.name || scriptDetail?.code}</CardTitle>
-                      <CardDescription>
-                        {isNewScript ? (
-                          "Unsaved — not yet created."
-                        ) : (
-                          <span className="flex items-center gap-2">
-                            <Badge variant={scriptDetail?.status === "published" ? "default" : scriptDetail?.status === "archived" ? "outline" : "secondary"}>
-                              {scriptDetail?.status}
-                            </Badge>
-                            {scriptDetail?.status === "published" && <span>version {scriptDetail?.version}</span>}
-                          </span>
-                        )}
-                      </CardDescription>
+                      {isNewScript ? (
+                        <CardDescription>Unsaved — not yet created.</CardDescription>
+                      ) : (
+                        // Intentionally NOT a <CardDescription> (a <p>): Badge renders a
+                        // <div>, and a <div> inside a <p> is invalid HTML React warns
+                        // about at runtime (caught by the frontend test harness, not by
+                        // tsc or the build). A plain flex row avoids the invalid nesting.
+                        <div className="flex items-center gap-2 text-sm text-muted-foreground mt-1">
+                          <Badge variant={scriptDetail?.status === "published" ? "default" : scriptDetail?.status === "archived" ? "outline" : "secondary"}>
+                            {scriptDetail?.status}
+                          </Badge>
+                          {scriptDetail?.status === "published" && <span>version {scriptDetail?.version}</span>}
+                        </div>
+                      )}
                     </div>
                     <Button size="sm" variant="ghost" onClick={closeScriptEditor}>Close</Button>
                   </CardHeader>
