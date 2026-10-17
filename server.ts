@@ -29,6 +29,7 @@ import { WorkerRegistry } from "./server/workers/WorkerRegistry.js";
 import { WorkerSupervisor } from "./server/workers/WorkerSupervisor.js";
 import { seoRoutes } from "./server/routes/seoRoutes.js";
 import { requireAnyRole } from "./server/communication/rbac.js";
+import { createRequireOperatorAuth } from "./server/middleware/requireOperatorAuth.js";
 
 // pg's ConnectionParameters merges parse(connectionString) over the explicit `ssl`
 // option passed to `new Pool()` (pg/lib/connection-parameters.js: `config =
@@ -195,21 +196,14 @@ export async function createApp() {
     }
   });
 
-  // Operator auth guard: accepts valid Supabase JWT or service token
-  const requireOperatorAuth = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
-    const header = req.headers.authorization;
-    const serviceToken = process.env.BELL24H_VYAPARSETHU_SERVICE_TOKEN;
-    if (serviceToken && header === `Bearer ${serviceToken}`) {
-      (req as any).requestId = resolveRequestId(req, res);
-      return next();
-    }
-    // Allow in development mode if no authorization header is passed
-    if (process.env.NODE_ENV !== "production" && !header) {
-      (req as any).requestId = resolveRequestId(req, res);
-      return next();
-    }
-    return requireAuth(req, res, next);
-  };
+  // Operator auth guard: accepts valid Supabase JWT (ADMIN role required) or
+  // service token. See server/middleware/requireOperatorAuth.ts for the full
+  // contract and rationale -- extracted there so it's unit-testable without
+  // a real database connection.
+  // getPool is declared later in this function; wrapped in a lambda so the
+  // reference is resolved lazily (at request time, once getPool genuinely
+  // exists) rather than eagerly when this object literal is constructed.
+  const requireOperatorAuth = createRequireOperatorAuth({ getPool: () => getPool() });
 
   // AI Router Operator & Diagnostic REST Endpoints
   app.get("/api/v1/ai-router/dashboard", requireOperatorAuth, (req, res) => {
