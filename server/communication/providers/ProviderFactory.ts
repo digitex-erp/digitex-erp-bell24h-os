@@ -21,7 +21,8 @@
 import type { ProviderAdapter, ResolvedProviderConfig } from "../types.js";
 import { ResendProvider } from "./ResendProvider.js";
 import { SMTPProvider } from "./SMTPProvider.js";
-import { MSG91Provider, MetaWhatsAppProvider } from "./StubProviders.js";
+import { MSG91Provider } from "./StubProviders.js";
+import { MetaWhatsAppProvider } from "./MetaWhatsAppProvider.js";
 
 export class UnknownProviderError extends Error {
   constructor(provider: string) {

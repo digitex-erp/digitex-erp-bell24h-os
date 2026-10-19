@@ -10,7 +10,7 @@ import {
 } from "../providers/ProviderFactory.js";
 import { ResendProvider } from "../providers/ResendProvider.js";
 import { SMTPProvider } from "../providers/SMTPProvider.js";
-import { MetaWhatsAppProvider, MSG91Provider } from "../providers/StubProviders.js";
+import { MSG91Provider } from "../providers/StubProviders.js";
 
 const cfg = (provider: string, settings: Record<string, unknown> = {}, secretValue = "s3cret") => ({ provider, secretValue, settings });
 
@@ -145,10 +145,9 @@ describe("approved provider set (strategy: Resend + SMTP, Meta WhatsApp, MSG91 S
   });
 });
 
-describe("stub providers (real Meta / MSG91 adapters are Sprints C1 / C2)", () => {
+describe("stub providers (real MSG91 adapter is Sprint C2; Meta WhatsApp is now real, see metaWhatsAppProvider.test.ts)", () => {
   for (const [name, adapter] of [
     ["MSG91", new MSG91Provider()],
-    ["Meta WhatsApp", new MetaWhatsAppProvider()],
   ] as const) {
     it(`${name}: send / status / healthCheck throw loudly; validate reports invalid`, async () => {
       await assert.rejects(() => adapter.send({ recipient: "+919876543210", body: "x" }, cfg(adapter.provider)), /non-functional stub/);
