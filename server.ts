@@ -424,11 +424,63 @@ export async function createApp() {
   // only a caller holding CRON_SECRET can trigger job processing. See
   // docs/project/BELL24H_OS_P0_REMEDIATION_IMPLEMENTATION_PLAN.md Phase 3 and
   // docs/project/BELL24H_OS_RUNTIME_REALITY_CERTIFICATION.md §2.
+  //
+  // Runtime audit (2026-10-19) finding: WorkerSupervisor.start()'s reaper loop
+  // suffers the exact same problem as WorkerRegistry.start() above -- it is
+  // only invoked from startServer(), which never runs under Vercel (see
+  // server.ts's own `if (!process.env.VERCEL)` guard below). That left
+  // reapOrphanedJobs() completely unreachable in the deployed runtime: a job
+  // whose worker lease expired (crash, timeout, cold-start kill) was never
+  // reclaimed by anything, for any job type -- not just communication. Fixed
+  // here by running one reaper pass immediately before the batch claim, in
+  // the same already-authenticated tick invocation, reusing the existing
+  // WorkerSupervisor singleton (already constructed by getWorkerSupervisor()
+  // for /api/v1/workers/status) rather than adding a second reaper or a new
+  // queue. Ordered first so a job reclaimed this tick (status flipped to
+  // 'retrying', next_run_at = NOW()) is immediately eligible for
+  // processBatch()'s own claimJobs() call below, instead of waiting for the
+  // next tick.
+  //
+  // runReaperTick() itself already catches and logs its own internal errors
+  // (see WorkerSupervisor.ts) rather than throwing, so in practice this
+  // outer try/catch mainly guards against a failure in constructing/reaching
+  // the supervisor itself -- but it is kept so a genuine failure here is
+  // reported as an HTTP error, not silently folded into a false "success".
+  // The route surfaces the real reaper/batch counts rather than a bare
+  // boolean, so an operator can see e.g. reapedJobsCount=0 and distinguish
+  // "nothing to reap" from "something went wrong" via the server log.
+  //
+  // SAFETY NOTE, not relaxed by this fix: reclaiming an orphaned job makes it
+  // eligible for a retry. For the 'communication' job type specifically, a
+  // retry of a message whose provider send may have already reached Meta
+  // (MetaWhatsAppProvider.ts does not consume message.idempotencyKey, and
+  // Meta's Cloud API has no confirmed equivalent) can resend a real WhatsApp
+  // message. This fix does not add, remove, or change that risk -- it only
+  // makes the existing reclaim-and-retry mechanism actually run. Reclaimed
+  // 'communication' jobs must not be allowed to reach a real Meta send until
+  // either a pre-send dedupe check against communication_deliveries (or
+  // equivalent reconciliation) is reviewed and merged, or the project owner
+  // explicitly accepts the duplicate-send risk in writing. No live Meta
+  // credential is activated by this change.
   app.get("/api/v1/workers/tick", requireCronAuth, async (req, res) => {
     try {
+      const supervisor = getWorkerSupervisor();
+      const reaper = await supervisor.runReaperTick();
+      // runReaperTick() never rejects by design (see WorkerSupervisor.ts) --
+      // an internal DB failure in either of its two steps resolves with the
+      // matching *Error field set instead. Logged here too, under the same
+      // "[Runtime] Worker tick" prefix the catch block below already uses,
+      // so an operator grepping server logs for tick problems finds a
+      // reap-layer failure the same way as any other -- not only visible in
+      // the JSON response body.
+      if (reaper.reapError || reaper.deadWorkerDetectionError) {
+        console.error("[Runtime] Worker tick reaper error:", reaper.reapError ?? reaper.deadWorkerDetectionError);
+      }
+
       const registry = getWorkerRegistry();
       const summary = await registry.processBatch();
-      res.json({ success: true, ...summary });
+
+      res.json({ success: true, reaper, ...summary });
     } catch (err: any) {
       console.error("[Runtime] Worker tick error:", err.message);
       res.status(500).json({ error: err.message });

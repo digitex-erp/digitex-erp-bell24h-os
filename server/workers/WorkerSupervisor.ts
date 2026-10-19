@@ -83,9 +83,31 @@ export class WorkerSupervisor {
 
   /**
    * Core reaper logic: detects dead workers and reclaims their orphaned tasks.
+   *
+   * Review finding (2026-10-19): this method's own internal try/catch blocks
+   * log and swallow a database failure in either step rather than rejecting
+   * -- by design, so a transient error in one step never prevents the other
+   * from running, and so existing callers (WorkerSupervisor.start()'s own
+   * setInterval loop) that never expected this method to reject keep working
+   * unchanged. That is a deliberate, preserved contract, not something this
+   * fix redesigns. What was missing is a way for a CALLER to tell "zero
+   * because nothing was stuck" apart from "zero because a query failed" --
+   * the two optional error fields below close exactly that gap, additively:
+   * existing callers that only read deadWorkersCount/reapedJobsCount (none
+   * exist elsewhere in this codebase today, confirmed by search) are
+   * unaffected; a caller that also wants failure visibility -- the
+   * /api/v1/workers/tick route, via the response object it already spreads
+   * this return value into -- now has it, with no further wiring needed.
    */
-  async runReaperTick(): Promise<{ deadWorkersCount: number; reapedJobsCount: number }> {
+  async runReaperTick(): Promise<{
+    deadWorkersCount: number;
+    reapedJobsCount: number;
+    deadWorkerDetectionError?: string;
+    reapError?: string;
+  }> {
     let deadWorkersCount = 0;
+    let deadWorkerDetectionError: string | undefined;
+    let reapError: string | undefined;
 
     // 1. Detect dead workers whose heartbeats have stalled beyond timeout
     try {
@@ -117,7 +139,8 @@ export class WorkerSupervisor {
         });
       }
     } catch (err: any) {
-      console.error("[WorkerSupervisor] Error querying dead workers:", err.message);
+      deadWorkerDetectionError = err?.message || String(err);
+      console.error("[WorkerSupervisor] Error querying dead workers:", deadWorkerDetectionError);
     }
 
     // 2. Reclaim orphaned jobs via QueueManager
@@ -139,10 +162,11 @@ export class WorkerSupervisor {
         });
       }
     } catch (err: any) {
-      console.error("[WorkerSupervisor] Error reclaiming orphaned jobs:", err.message);
+      reapError = err?.message || String(err);
+      console.error("[WorkerSupervisor] Error reclaiming orphaned jobs:", reapError);
     }
 
-    return { deadWorkersCount, reapedJobsCount };
+    return { deadWorkersCount, reapedJobsCount, deadWorkerDetectionError, reapError };
   }
 
   /**
