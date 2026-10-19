@@ -1,26 +1,24 @@
 /**
- * Non-functional provider stubs — MSG91 (SMS), Meta WhatsApp Cloud API (direct).
+ * Non-functional provider stub — MSG91 (SMS) only.
  *
- * Per explicit instruction: "Do not implement MSG91 or WhatsApp sending yet.
- * Only foundation and provider abstraction." These exist so ProviderFactory
- * can resolve a `communication_providers.provider` value of 'msg91' or
- * 'meta_whatsapp' to *something* conforming to ProviderAdapter,
- * without pretending any of them can actually send.
+ * The Meta WhatsApp Cloud API stub that used to live here has been replaced
+ * by the real adapter in ./MetaWhatsAppProvider.ts (Sprint C1). MSG91 remains
+ * a stub: Gate D.1 criterion 4 (whether MSG91 is actually intended for this
+ * project, as distinct from an unrelated Bell24h codebase) is still an open
+ * owner question, not an engineering one -- building a real adapter for it
+ * now would risk the exact project-conflation the bell24h-verify skill exists
+ * to prevent. Per explicit instruction: "Do not implement MSG91 ... sending
+ * yet." This exists so ProviderFactory can resolve a
+ * `communication_providers.provider` value of 'msg91' to *something*
+ * conforming to ProviderAdapter, without pretending it can actually send.
  *
  * validate() returns a clean, non-throwing "invalid, this is a stub" result —
  * safe to call from anywhere. send(), status(), and healthCheck() THROW,
- * deliberately, so that anyone who mistakenly wires one of these into a real
+ * deliberately, so that anyone who mistakenly wires this into a real
  * send path gets a loud, unambiguous failure instead of a silently-swallowed
  * no-op or a fabricated success. This mirrors this codebase's existing
  * "PROVIDER_NOT_CONFIGURED" honest-failure convention (see
  * server/workers/handlers/MediaJobHandler.ts / PublishingJobHandler.ts).
- *
- * Provider strategy (owner decision, 2026-09-28): Email = Resend primary + SMTP
- * fallback; SMS = MSG91; WhatsApp = Meta Cloud API direct. Twilio and
- * WhatsApp-via-MSG91 are removed; Exotel and Gupshup are deferred and have no
- * code here. The real Meta (Sprint C1) and MSG91 (Sprint C2) adapters replace
- * these stubs only after the Gate D.1 criteria are met — these stubs are NOT a
- * signal that integration work has started.
  */
 
 import type {
@@ -64,9 +62,4 @@ abstract class NotImplementedProvider implements ProviderAdapter {
 export class MSG91Provider extends NotImplementedProvider {
   readonly provider = "msg91";
   readonly channelType = "sms" as const;
-}
-
-export class MetaWhatsAppProvider extends NotImplementedProvider {
-  readonly provider = "meta_whatsapp";
-  readonly channelType = "whatsapp" as const;
 }
