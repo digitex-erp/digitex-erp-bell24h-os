@@ -42,16 +42,18 @@ export interface SeoKeyword {
   project_id: string;
   cluster_id?: string;
   keyword: string;
-  search_volume: number;
-  difficulty: number;
-  cpc: number;
+  // null = not yet measured (no real keyword-data source configured) -- never a
+  // fabricated placeholder. See EnterpriseSeoService.addKeyword()'s own comment.
+  search_volume: number | null;
+  difficulty: number | null;
+  cpc: number | null;
   intent: KeywordIntent;
   cluster_name?: string;
   parent_topic?: string;
   is_tracked: boolean;
   current_position?: number | null;
   previous_position?: number | null;
-  opportunity_score: number;
+  opportunity_score: number | null;
   created_at: string;
   updated_at: string;
 }
