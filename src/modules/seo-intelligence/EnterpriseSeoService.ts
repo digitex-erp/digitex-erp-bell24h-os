@@ -135,8 +135,12 @@ export class EnterpriseSeoService {
       .eq('organization_id', orgId)
       .order('opportunity_score', { ascending: false });
 
-    if (error || !data || data.length === 0) {
-      return this.getFallbackKeywords(orgId, projectId);
+    if (error || !data) {
+      // A real query error (not "no rows yet") is swallowed above intentionally
+      // the same way the rest of this service treats a transient read failure --
+      // but it must never be presented as "these are your measured keywords."
+      // Honest empty result, not hardcoded seed data pretending to be measured.
+      return [];
     }
     return data;
   }
@@ -144,10 +148,16 @@ export class EnterpriseSeoService {
   async addKeyword(projectId: string, keyword: string, intent?: KeywordIntent): Promise<SeoKeyword> {
     const orgId = await this.getOrgId();
     const resolvedIntent = intent || this.classifyIntentLocal(keyword);
-    const volume = Math.floor(Math.random() * 8500) + 500;
-    const difficulty = Math.floor(Math.random() * 65) + 15;
-    const oppScore = Number(((volume / Math.max(difficulty, 1)) * 10).toFixed(2));
-    const cpc = Number((Math.random() * 45 + 5).toFixed(2));
+    // No keyword-data provider is configured yet (P0 fix, 2026-10-25): this
+    // previously generated plausible-looking search_volume/difficulty/cpc/
+    // position/opportunity_score via Math.random() and persisted them as if
+    // measured. These are now explicitly null -- "not yet measured" -- never a
+    // fabricated number. Wiring a real keyword-data source (and backfilling
+    // these fields once one exists) is a separate, not-yet-implemented task.
+    const volume: number | null = null;
+    const difficulty: number | null = null;
+    const oppScore: number | null = null;
+    const cpc: number | null = null;
 
     const record = {
       organization_id: orgId,
@@ -160,8 +170,8 @@ export class EnterpriseSeoService {
       cluster_name: this.detectCluster(keyword),
       parent_topic: this.detectParentTopic(keyword),
       is_tracked: true,
-      current_position: Math.floor(Math.random() * 25) + 3,
-      previous_position: Math.floor(Math.random() * 30) + 4,
+      current_position: null,
+      previous_position: null,
       opportunity_score: oppScore
     };
 
@@ -630,40 +640,17 @@ export class EnterpriseSeoService {
   }
 
   async generateContentBrief(projectId: string, topic: string, intent: KeywordIntent = 'Commercial'): Promise<SeoContentBrief> {
-    const orgId = await this.getOrgId();
-    const briefRecord: Partial<SeoContentBrief> = {
-      organization_id: orgId,
-      project_id: projectId,
-      target_topic: topic,
-      target_intent: intent,
-      target_word_count: 2400,
-      target_keywords: [
-        topic,
-        `${topic} wholesale suppliers India`,
-        `${topic} manufacturing specifications`,
-        `how to buy ${topic} in bulk`,
-        `${topic} minimum order quantity`
-      ],
-      heading_outline: [
-        { heading: `Executive Summary & Market Dynamics of ${topic}`, level: 2, intent: "Informational" },
-        { heading: `Technical Quality Benchmarks, GSM, and Fiber Counts`, level: 2, intent: "Commercial" },
-        { heading: `Direct Manufacturer vs Trader Pricing Comparison`, level: 2, intent: "Transactional" },
-        { heading: `Escrow-Protected Sourcing Process on Bell24h / VyaparSethu`, level: 2, intent: "Transactional" },
-        { heading: `Frequently Asked Questions from Global Buyers`, level: 2, intent: "Informational" }
-      ],
-      suggested_faqs: [
-        { question: `What is the standard lead time for ${topic}?`, answer_guideline: "Explain 10-18 business days transit with GPS tracking." },
-        { question: `Are custom dye lots supported?`, answer_guideline: "Highlight Pantone matching from 500 meter MOQs." }
-      ],
-      internal_linking_suggestions: [
-        "/marketplace/fabrics",
-        "/trust-os/escrow",
-        "/directories/surat-mills"
-      ],
-      eeat_guidelines: "Cite ISO 105-C06 color fastness testing standards and mention verified GST inspection."
-    };
-
-    return { id: `brief-${Date.now()}`, ...briefRecord, created_at: new Date().toISOString() } as SeoContentBrief;
+    // No real AI/LLM provider call is wired to content-brief generation (P0 fix,
+    // 2026-10-25): this previously returned a fully-formed, plausible-looking
+    // brief (headings, FAQs, internal links) built from string templates, with
+    // no indication it wasn't a genuine AI-generated result. Per the
+    // honest-failure convention used throughout this codebase (ProviderRouter,
+    // MediaJobHandler), a feature that cannot genuinely perform its advertised
+    // operation must fail, not fabricate a convincing substitute.
+    throw new Error(
+      "SEO_CONTENT_BRIEF_NOT_IMPLEMENTED: AI-generated content briefs are not yet available " +
+      "(no AI provider is wired to this feature)."
+    );
   }
 
   // --------------------------------------------------------------------------
@@ -1108,39 +1095,12 @@ export class EnterpriseSeoService {
     }];
   }
 
-  private getFallbackKeywords(orgId: string, projectId: string): SeoKeyword[] {
-    const seeds = [
-      { kw: "cotton yarn wholesale price Surat", vol: 8400, diff: 38, cpc: 24.50, int: 'Transactional' as const, cl: "Cotton & Yarn Spinning", pos: 3 },
-      { kw: "combed organic cotton fabric manufacturers", vol: 6200, diff: 32, cpc: 38.00, int: 'Commercial' as const, cl: "Fabric Manufacturing", pos: 2 },
-      { kw: "B2B textile marketplace India escrow", vol: 4100, diff: 28, cpc: 45.20, int: 'Commercial' as const, cl: "Trade Security", pos: 1 },
-      { kw: "airjet loom fabric suppliers Tirupur", vol: 3900, diff: 41, cpc: 28.00, int: 'Transactional' as const, cl: "Textile Machinery", pos: 5 },
-      { kw: "recycled polyester yarn wholesale rate", vol: 5400, diff: 29, cpc: 19.80, int: 'Transactional' as const, cl: "Cotton & Yarn Spinning", pos: 4 },
-      { kw: "linen blend fabric bulk supplier Ahmedabad", vol: 3200, diff: 35, cpc: 22.40, int: 'Commercial' as const, cl: "Fabric Manufacturing", pos: 6 },
-      { kw: "how to verify textile mill GOTS certificate", vol: 1800, diff: 19, cpc: 12.00, int: 'Informational' as const, cl: "Trade Security", pos: 4 },
-      { kw: "circular knitting machinery suppliers Gujarat", vol: 2200, diff: 44, cpc: 31.00, int: 'Transactional' as const, cl: "Textile Machinery", pos: 12 },
-      { kw: "polyester viscose blended fabric wholesale", vol: 5100, diff: 48, cpc: 26.50, int: 'Transactional' as const, cl: "Fabric Manufacturing", pos: 7 },
-      { kw: "sustainable textile dye factories Tamil Nadu", vol: 1950, diff: 26, cpc: 18.20, int: 'Commercial' as const, cl: "Fabric Manufacturing", pos: 3 }
-    ];
-
-    return seeds.map((s, idx) => ({
-      id: `kw-seed-${idx + 1}`,
-      organization_id: orgId,
-      project_id: projectId,
-      keyword: s.kw,
-      search_volume: s.vol,
-      difficulty: s.diff,
-      cpc: s.cpc,
-      intent: s.int,
-      cluster_name: s.cl,
-      parent_topic: "Textile B2B Sourcing",
-      is_tracked: true,
-      current_position: s.pos,
-      previous_position: s.pos + (idx % 2 === 0 ? 1 : -1),
-      opportunity_score: Number(((s.vol / Math.max(s.diff, 1)) * 10).toFixed(2)),
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString()
-    }));
-  }
+  // getFallbackKeywords() was removed here (P0 fix, 2026-10-25): it returned
+  // hardcoded example keyword rows (plausible-looking search volumes,
+  // positions, CPCs) as the result of getKeywords() whenever the real table
+  // was empty -- indistinguishable from genuinely measured data to a user.
+  // getKeywords() now returns an honest empty array instead. Its only caller
+  // was getKeywords() above; confirmed via grep before removal.
 
   private getFallbackClusters(orgId: string, projectId: string): SeoKeywordGroup[] {
     return [

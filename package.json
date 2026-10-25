@@ -10,7 +10,7 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
-    "test": "tsx --test server/ai/*.test.ts \"server/communication/__tests__/*.test.ts\""
+    "test": "tsx --test --experimental-test-module-mocks server/ai/*.test.ts \"server/communication/__tests__/*.test.ts\" src/modules/seo-intelligence/*.test.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
