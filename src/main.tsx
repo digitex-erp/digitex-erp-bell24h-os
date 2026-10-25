@@ -4,10 +4,6 @@ import App from './App.tsx';
 import './index.css';
 import { ErrorBoundary } from './components/ErrorBoundary.tsx';
 
-// import { JobWorker } from './modules/job-orchestrator/JobWorker';
-
-// JobWorker.getInstance().start();
-
 // Global error listener for uncaught errors
 window.addEventListener('error', (event) => {
   console.error("[Runtime] Global Error Caught:", event.error || event.message);
