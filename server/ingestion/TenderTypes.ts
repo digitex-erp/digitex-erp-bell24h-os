@@ -9,11 +9,23 @@
  * other explicitly-approved retrieval method; SourceAdapter only commits to
  * "produces this shape," not "calls this kind of endpoint."
  *
- * Modeled after an existing, already-proven VyaparSethu pattern
- * (ExternalLead: source, rawText, nullable extracted fields, status,
- * nullable rfqId, processedAt — read-only, verified against
- * prisma/schema.prisma in the related repository this session), not
- * invented from scratch. See docs/project/TENDER_INGESTION_PROPOSED_SCHEMA.md
+ * Modeled after an existing VyaparSethu pattern -- `ExternalLead` (source,
+ * rawText, nullable extracted fields, status, nullable rfqId, processedAt) --
+ * rather than invented from scratch.
+ *
+ * Evidence level for that pattern, stated precisely (read-only inspection of
+ * `bell24xcom/forBell24x`): the model is defined in `prisma/schema.prisma`
+ * AND is exercised by real application code, not schema-only. Verified call
+ * sites: `src/app/api/leads/import/route.ts` (a genuine write path --
+ * `prisma.externalLead.create()`, plus status/source aggregate reads) and
+ * `src/app/api/demand/dashboard/route.ts` (reads: count/groupBy/findMany).
+ * Notably that code also uses a `status: 'new' -> 'converted'` lifecycle,
+ * which is the same deferred-promotion shape this module adopts.
+ *
+ * What is NOT claimed: no production end-to-end behavior of those routes was
+ * executed or verified here, and nothing about VyaparSethu's deployment state
+ * is asserted -- only that the pattern exists in schema and is referenced by
+ * application source. See docs/project/TENDER_INGESTION_PROPOSED_SCHEMA.md
  * (NOT APPLIED) for how a future persistent table would mirror it.
  */
 
