@@ -151,7 +151,11 @@ export class RouterDeadlineExceededError extends Error {
   }
 }
 
-function consumeBudget(organizationId: string): void {
+// Exported (2026-10-25, Video Factory integration): MediaJobHandler reuses this
+// exact per-org daily budget cap before dispatching a paid video-generation call,
+// rather than inventing a second, competing budget mechanism for media jobs.
+// Behavior is unchanged for every existing text-route caller.
+export function consumeBudget(organizationId: string): void {
   const now = Date.now();
   const entry = budgetByOrg.get(organizationId);
 

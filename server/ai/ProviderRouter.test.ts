@@ -501,6 +501,58 @@ test("routeText: a malformed response (missing choices entirely) is rejected the
   }
 });
 
+test("routeText: an explicit non-default NVIDIA model override reaches the actual request body", async () => {
+  resetAllBreakers();
+  const originalFetch = global.fetch;
+  const overrideModel = "nvidia/nemotron-3.5-lightning-30b-a3b";
+  let capturedBody: any = null;
+  global.fetch = (async (_url: string, init: any) => {
+    capturedBody = JSON.parse(init.body);
+    return new Response(JSON.stringify({ choices: [{ message: { content: "ok" } }] }), { status: 200 });
+  }) as any;
+
+  try {
+    const result = await routeText(freshCtx({ deadlineMs: 12000 }), {
+      prompt: "hi",
+      model: overrideModel,
+      preferredProvider: "nvidia",
+      allowFallback: false,
+    });
+    assert.equal(capturedBody.model, overrideModel, "the exact overridden model ID must reach the NVIDIA request body");
+    assert.equal(result.model, overrideModel, "the router's returned result must report the overridden model, not the adapter's default");
+    assert.equal(result.provider, "nvidia");
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("routeText: the empty-content guard still rejects an explicit non-default NVIDIA model override", async () => {
+  resetAllBreakers();
+  const originalFetch = global.fetch;
+  const overrideModel = "nvidia/nemotron-3.5-lightning-30b-a3b";
+  let capturedBody: any = null;
+  global.fetch = (async (_url: string, init: any) => {
+    capturedBody = JSON.parse(init.body);
+    return new Response(JSON.stringify({ choices: [{ message: { content: "" } }] }), { status: 200 });
+  }) as any;
+
+  try {
+    await assert.rejects(
+      () =>
+        routeText(freshCtx({ deadlineMs: 12000 }), {
+          prompt: "hi",
+          model: overrideModel,
+          preferredProvider: "nvidia",
+          allowFallback: false,
+        }),
+      /returned empty or invalid text content/
+    );
+    assert.equal(capturedBody.model, overrideModel, "the rejection must have been evaluated against the overridden model's own response, not a default-model call");
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
 test("routeJson: a valid but textually-unusual JSON object (e.g. {}) is NOT rejected — the text-emptiness check must not apply to the JSON path", async () => {
   resetAllBreakers();
   const originalFetch = global.fetch;
