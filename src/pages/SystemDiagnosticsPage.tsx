@@ -8,6 +8,7 @@ import { supabase, SUPABASE_CONFIGURED, supabaseProjectId } from "@/lib/supabase
 import { useAuthStore } from "@/store/useAuthStore";
 import { authedFetchJson } from "@/lib/authedFetch";
 import { diagnosticError } from "@/lib/diagnosticsErrors";
+import { interpretMigrationResponse } from "@/lib/migrationResponse";
 
 export function SystemDiagnosticsPage() {
   const [serverEnv, setServerEnv] = useState<any>(null);
@@ -40,15 +41,20 @@ export function SystemDiagnosticsPage() {
     setMigrationResult(null);
     try {
       const resp = await fetch('/api/migrate');
-      const data = await resp.json();
-      setMigrationResult(data);
-      if (data.success) {
+      // .catch(() => null) covers an empty or non-JSON body (e.g. devOnly()'s
+      // 404) without throwing "Unexpected end of JSON input" out of this try.
+      const data = await resp.json().catch(() => null);
+      const result = interpretMigrationResponse(resp.status, resp.ok, data);
+      setMigrationResult(result);
+      if (result.success) {
         await runDiagnostics();
       }
     } catch (e: any) {
-      setMigrationResult({ 
+      // Only a genuine network-level failure (fetch itself rejecting) reaches
+      // here now -- the previous DATABASE_URL hint was never accurate for
+      // this catch path and is intentionally not restored.
+      setMigrationResult({
         error: e.message || 'Unknown network error during migration',
-        hint: 'Check if DATABASE_URL is reachable from the server.'
       });
     } finally {
       setMigrating(false);
