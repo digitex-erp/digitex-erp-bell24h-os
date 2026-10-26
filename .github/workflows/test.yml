@@ -1,0 +1,35 @@
+name: Test
+
+# Confirmed via `gh pr checks` (independent review of PR #15, 2026-10-26) that
+# no existing check on this repository runs `npm test` or a TypeScript
+# check -- the three checks that currently gate every PR (GitGuardian,
+# Vercel build, Vercel Preview Comments) are GitHub-App-based and do not
+# execute this repo's test suite. This workflow is the first one added to
+# .github/workflows in this repository -- there is no prior workflow to
+# conflict with or duplicate.
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - 'feature/**'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check
+        run: npx tsc --noEmit
+
+      - name: Test
+        run: npm test

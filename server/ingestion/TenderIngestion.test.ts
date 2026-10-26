@@ -17,6 +17,7 @@ import {
 } from "./tenderValidation.js";
 import { compareForReingestion, flagPossibleDuplicateForReview } from "./tenderDeduplication.js";
 import { assertNeverPromotesToRfq, ingestFromSource, UnapprovedSourceError, type PersistableIngestionResult } from "./TenderIngestionPipeline.js";
+import { getApprovedSourceCount, __setApprovedSourceIdsForTesting, __resetApprovedSourceIdsForTesting } from "./approvedSources.js";
 
 const FIXTURE_SOURCE_ID = "fixture_portal";
 
@@ -60,7 +61,10 @@ function fixtureAdapter(pages: SourceRetrievalResult[][]): SourceAdapter {
   };
 }
 
-const APPROVED = new Set([FIXTURE_SOURCE_ID]);
+// Approves FIXTURE_SOURCE_ID for every test in this file via the explicit,
+// unmistakably-named test-only setter in approvedSources.ts -- never via a
+// parameter on ingestFromSource/IngestOptions, which no longer accept one.
+__setApprovedSourceIdsForTesting([FIXTURE_SOURCE_ID]);
 
 // 1. Valid tender normalization
 test("1: a well-formed source record normalizes with no warnings and applicationStatus 'new'", () => {
@@ -188,12 +192,12 @@ test("8: re-ingesting the identical record twice produces insert then noop, neve
   const adapter = fixtureAdapter([[raw], [raw]]);
   const priorRecords = new Map<string, NormalizedTenderRecord>();
 
-  const first = await ingestFromSource(adapter, { requestId: "req-1", organizationId: "org-a", priorRecords, approvedSourceIds: APPROVED });
+  const first = await ingestFromSource(adapter, { requestId: "req-1", organizationId: "org-a", priorRecords });
   assert.equal(first.length, 1);
   assert.equal(first[0].action, "insert");
   priorRecords.set(first[0].record.id, first[0].record);
 
-  const second = await ingestFromSource(adapter, { requestId: "req-2", organizationId: "org-a", priorRecords, approvedSourceIds: APPROVED });
+  const second = await ingestFromSource(adapter, { requestId: "req-2", organizationId: "org-a", priorRecords });
   assert.equal(second.length, 1);
   assert.equal(second[0].action, "noop", "identical re-fetch must be a no-op, not a duplicate insert");
   assert.equal(second[0].record.id, first[0].record.id);
@@ -203,13 +207,13 @@ test("8: re-ingesting the identical record twice produces insert then noop, neve
 test("9: a changed description and a changed deadline are both detected as 'update', with exact changed fields listed", async () => {
   const priorRecords = new Map<string, NormalizedTenderRecord>();
   const adapter1 = fixtureAdapter([[makeRaw()]]);
-  const first = await ingestFromSource(adapter1, { requestId: "r1", organizationId: "org-a", priorRecords, approvedSourceIds: APPROVED });
+  const first = await ingestFromSource(adapter1, { requestId: "r1", organizationId: "org-a", priorRecords });
   priorRecords.set(first[0].record.id, first[0].record);
 
   const adapter2 = fixtureAdapter([
     [makeRaw({ payload: { description: "Updated scope: chairs, desks, and cabinets.", submissionDeadline: "2026-12-01T17:00:00+05:30" } })],
   ]);
-  const second = await ingestFromSource(adapter2, { requestId: "r2", organizationId: "org-a", priorRecords, approvedSourceIds: APPROVED });
+  const second = await ingestFromSource(adapter2, { requestId: "r2", organizationId: "org-a", priorRecords });
 
   assert.equal(second[0].action, "update");
   assert.ok(second[0].comparison?.changedFields.includes("description"));
@@ -234,10 +238,10 @@ test("11: the adapter contract carries pagination metadata through unchanged, an
   const page2 = [makeRaw({ sourceNoticeId: "N2", pagination: { page: 2, hasMore: false } })];
   const adapter = fixtureAdapter([page1, page2]);
 
-  const firstPage = await ingestFromSource(adapter, { requestId: "r1", organizationId: "org-a", approvedSourceIds: APPROVED });
+  const firstPage = await ingestFromSource(adapter, { requestId: "r1", organizationId: "org-a"});
   assert.equal(firstPage.length, 1);
 
-  const secondPage = await ingestFromSource(adapter, { requestId: "r2", organizationId: "org-a", approvedSourceIds: APPROVED }, "c2");
+  const secondPage = await ingestFromSource(adapter, { requestId: "r2", organizationId: "org-a"}, "c2");
   assert.equal(secondPage.length, 1);
 
   const rateLimited = normalizeTenderRecord(
@@ -256,7 +260,7 @@ test("12: normalized output and audit metadata never carry a raw payload, header
     },
   });
   const adapter = fixtureAdapter([[sensitiveRaw]]);
-  const results = await ingestFromSource(adapter, { requestId: "r1", organizationId: "org-a", approvedSourceIds: APPROVED });
+  const results = await ingestFromSource(adapter, { requestId: "r1", organizationId: "org-a"});
 
   const serializedRecord = JSON.stringify(results[0].record);
   assert.ok(!serializedRecord.includes("secret-token-value"));
@@ -274,24 +278,33 @@ test("13: every normalized record retains its exact source id, notice id, and a 
   assert.ok(normalized.rawProvenanceRef.length > 0);
 });
 
-// 14. Tenant isolation using existing supported test infrastructure
-test("14: two organizations ingesting the same source content produce independently-scoped results with no cross-contamination of prior state", async () => {
+// 14. Application-logic-only check: this pipeline never shares mutable
+// state between two callers' prior-records maps. Independent-review P2
+// fix: this test's own wording previously implied a stronger guarantee
+// (a database/security tenant-isolation boundary) than what it actually
+// exercises -- two independent in-memory `Map` instances not sharing state
+// is a property of JavaScript's `Map` semantics, not of this codebase's
+// logic. This phase has no persistence layer to test a real cross-tenant
+// boundary against; that remains a separate, unresolved RLS/database
+// question (see BELL24H_OS_DATABASE_ROLE_RLS_VERIFICATION.md), not
+// something this test proves one way or the other.
+test("14: two callers' independent priorRecords maps never share mutable state within a single ingestFromSource run", async () => {
   const raw = makeRaw();
   const priorForOrgA = new Map<string, NormalizedTenderRecord>();
   const priorForOrgB = new Map<string, NormalizedTenderRecord>();
 
   const adapterA = fixtureAdapter([[raw]]);
-  const resultA = await ingestFromSource(adapterA, { requestId: "r-a", organizationId: "org-a", priorRecords: priorForOrgA, approvedSourceIds: APPROVED });
+  const resultA = await ingestFromSource(adapterA, { requestId: "r-a", organizationId: "org-a", priorRecords: priorForOrgA });
   priorForOrgA.set(resultA[0].record.id, resultA[0].record);
 
   // Org B's prior-state map was never touched by org A's run -- confirms no shared mutable state leaks between tenants.
   assert.equal(priorForOrgB.size, 0);
 
   const adapterB = fixtureAdapter([[raw]]);
-  const resultB = await ingestFromSource(adapterB, { requestId: "r-b", organizationId: "org-b", priorRecords: priorForOrgB, approvedSourceIds: APPROVED });
+  const resultB = await ingestFromSource(adapterB, { requestId: "r-b", organizationId: "org-b", priorRecords: priorForOrgB });
 
   assert.equal(resultA[0].action, "insert");
-  assert.equal(resultB[0].action, "insert", "org B sees this as a fresh insert too -- its own prior state is independent of org A's, exactly like QueueManager jobs never leaking organization_id across tenants");
+  assert.equal(resultB[0].action, "insert", "org B sees this as a fresh insert too -- its own priorRecords Map instance is independent of org A's, at the application-logic level this test actually exercises");
 });
 
 // 15. Rejection of unapproved source adapters
@@ -302,21 +315,94 @@ test("15: an adapter whose sourceId is not in the approved set is rejected befor
       throw new Error("fetchPage should never be called for an unapproved source");
     },
   };
+  // "gem" is not in the set this file approved via __setApprovedSourceIdsForTesting
+  // ([FIXTURE_SOURCE_ID] only) -- no per-call override exists to approve it instead.
   await assert.rejects(
-    () => ingestFromSource(unapproved, { requestId: "r1", organizationId: "org-a", approvedSourceIds: new Set(["fixture_portal"]) }),
+    () => ingestFromSource(unapproved, { requestId: "r1", organizationId: "org-a" }),
     UnapprovedSourceError,
   );
 });
 
-test("15b: the production default APPROVED_SOURCE_IDS is empty -- no real portal is cleared yet", async () => {
-  const { APPROVED_SOURCE_IDS } = await import("./TenderIngestionPipeline.js");
-  assert.equal(APPROVED_SOURCE_IDS.size, 0, "if this ever fails, a real source was approved -- confirm that against docs/audits/PROCUREMENT_PORTAL_ACCESS_REGISTER.md before treating it as fine");
+test("15b: the production default (nothing approved) is empty, independent of this file's own test setup", () => {
+  __resetApprovedSourceIdsForTesting();
+  assert.equal(getApprovedSourceCount(), 0, "if this ever fails, a real source was approved -- confirm that against docs/audits/PROCUREMENT_PORTAL_ACCESS_REGISTER.md before treating it as fine");
+  __setApprovedSourceIdsForTesting([FIXTURE_SOURCE_ID]); // restore for the remaining tests in this file
+});
+
+// 15c-15e. Independent-review P1 regression: both original bypasses, reproduced and proven blocked.
+test("15c: a caller-supplied 'approvedSourceIds'-shaped field on IngestOptions has no effect -- the options-override bypass is closed", async () => {
+  __resetApprovedSourceIdsForTesting(); // nothing approved at all right now
+  const unapproved: SourceAdapter = {
+    sourceId: "gem",
+    async fetchPage() {
+      throw new Error("fetchPage should never be called for an unapproved source");
+    },
+  };
+  // IngestOptions no longer declares this field, but nothing in JS stops a
+  // caller from attaching an extra property to an object literal -- this is
+  // exactly the shape the original bypass used. Cast through `unknown` to
+  // simulate that caller, then confirm ingestFromSource never reads it: the
+  // implementation no longer has any `options.approvedSourceIds` reference
+  // at all (see TenderIngestionPipeline.ts), so attaching it is inert.
+  const optionsWithInjectedField = {
+    requestId: "r1",
+    organizationId: "org-a",
+    approvedSourceIds: new Set(["gem"]),
+  } as unknown as Parameters<typeof ingestFromSource>[1];
+  await assert.rejects(
+    () => ingestFromSource(unapproved, optionsWithInjectedField),
+    UnapprovedSourceError,
+    "an injected approvedSourceIds field must not authorize a source the trusted policy never approved",
+  );
+  __setApprovedSourceIdsForTesting([FIXTURE_SOURCE_ID]); // restore for the remaining tests in this file
+});
+
+test("15d: approvedSources.ts exports no mutable collection -- the direct-mutation bypass is closed", async () => {
+  const approvedSourcesModule = await import("./approvedSources.js");
+  assert.equal(
+    "approvedSourceIds" in approvedSourcesModule || "APPROVED_SOURCE_IDS" in approvedSourcesModule,
+    false,
+    "no Set, under any name, should be an exported binding a caller could obtain a reference to and call .add() on",
+  );
+  const pipelineModule = await import("./TenderIngestionPipeline.js");
+  assert.equal(
+    "APPROVED_SOURCE_IDS" in pipelineModule,
+    false,
+    "the pipeline module must not re-export the old mutable collection either",
+  );
+});
+
+test("15e: approving a source for one request does not leak into a request made without that approval, and vice versa", async () => {
+  __resetApprovedSourceIdsForTesting();
+  const unapproved: SourceAdapter = {
+    sourceId: "gem",
+    async fetchPage() {
+      throw new Error("fetchPage should never be called for an unapproved source");
+    },
+  };
+  // First request: nothing approved -- must reject.
+  await assert.rejects(() => ingestFromSource(unapproved, { requestId: "r1", organizationId: "org-a" }), UnapprovedSourceError);
+
+  // A second, unrelated request explicitly (and only via the test-only
+  // setter, never via a request parameter) approves a DIFFERENT source.
+  __setApprovedSourceIdsForTesting(["some-other-test-source"]);
+  const stillUnapproved: SourceAdapter = {
+    sourceId: "gem",
+    async fetchPage() {
+      throw new Error("fetchPage should never be called for an unapproved source");
+    },
+  };
+  // "gem" must still be rejected -- approving a different source for a
+  // later request must never retroactively or incidentally approve this one.
+  await assert.rejects(() => ingestFromSource(stillUnapproved, { requestId: "r2", organizationId: "org-a" }), UnapprovedSourceError);
+
+  __setApprovedSourceIdsForTesting([FIXTURE_SOURCE_ID]); // restore for the remaining tests in this file
 });
 
 // 16. Prevention of automatic conversion into an RFQ
 test("16: PersistableIngestionResult has no path to an RFQ, Quote, or Deal -- structurally, not just by convention", async () => {
   const adapter = fixtureAdapter([[makeRaw()]]);
-  const results: PersistableIngestionResult[] = await ingestFromSource(adapter, { requestId: "r1", organizationId: "org-a", approvedSourceIds: APPROVED });
+  const results: PersistableIngestionResult[] = await ingestFromSource(adapter, { requestId: "r1", organizationId: "org-a"});
 
   const keys = Object.keys(results[0]);
   assert.deepEqual(keys.sort(), ["action", "comparison", "record"]);
@@ -333,11 +419,11 @@ test("17: a failed retrieval followed by a successful retry does not create a du
       throw new Error("simulated transient network failure");
     },
   };
-  await assert.rejects(() => ingestFromSource(failingAdapter, { requestId: "r1", organizationId: "org-a", priorRecords, approvedSourceIds: APPROVED }));
+  await assert.rejects(() => ingestFromSource(failingAdapter, { requestId: "r1", organizationId: "org-a", priorRecords }));
   assert.equal(priorRecords.size, 0, "a failed retrieval must leave no partial record behind");
 
   const retryAdapter = fixtureAdapter([[makeRaw()]]);
-  const retryResult = await ingestFromSource(retryAdapter, { requestId: "r2", organizationId: "org-a", priorRecords, approvedSourceIds: APPROVED });
+  const retryResult = await ingestFromSource(retryAdapter, { requestId: "r2", organizationId: "org-a", priorRecords });
   assert.equal(retryResult.length, 1);
   assert.equal(retryResult[0].action, "insert", "the retry is the first successful insert -- not a duplicate of anything, since nothing was actually persisted by the failed attempt");
 });
