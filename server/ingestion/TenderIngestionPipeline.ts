@@ -23,20 +23,7 @@ import { emitAuditEvent } from "../audit.js";
 import type { NormalizedTenderRecord, SourceAdapter, SourceRetrievalResult } from "./TenderTypes.js";
 import { normalizeTenderRecord } from "./tenderValidation.js";
 import { compareForReingestion, type ReingestionComparison } from "./tenderDeduplication.js";
-
-/**
- * Explicit allow-list, mirroring docs/audits/PROCUREMENT_PORTAL_ACCESS_REGISTER.md's
- * feasibility classification. Only a source explicitly marked APPROVED there
- * may run through this pipeline -- everything else (including every real
- * portal examined so far: cppp, gem, maharashtra_etenders, all currently
- * UNVERIFIED or worse per that register) is rejected here by construction,
- * not by relying on a caller to remember to check first.
- *
- * Empty in this phase deliberately: no real source has cleared legal/ToS
- * review yet (see the register). Test fixtures use a source id that is
- * explicitly added to this set only inside the test file itself, never here.
- */
-export const APPROVED_SOURCE_IDS: ReadonlySet<string> = new Set([]);
+import { isSourceApproved } from "./approvedSources.js";
 
 export class UnapprovedSourceError extends Error {
   constructor(sourceId: string) {
@@ -59,8 +46,6 @@ export interface IngestOptions {
   organizationId: string | null;
   /** Keyed by dedup key -- the caller's current known state, if any. This pipeline does not read a database itself. */
   priorRecords?: Map<string, NormalizedTenderRecord>;
-  /** Override for testing only -- production code must rely on the module-level APPROVED_SOURCE_IDS default. */
-  approvedSourceIds?: ReadonlySet<string>;
 }
 
 /**
@@ -79,8 +64,11 @@ export async function ingestFromSource(
   options: IngestOptions,
   cursor?: string | null,
 ): Promise<PersistableIngestionResult[]> {
-  const approved = options.approvedSourceIds ?? APPROVED_SOURCE_IDS;
-  if (!approved.has(adapter.sourceId)) {
+  // No parameter on this function or on IngestOptions can override this --
+  // approval is decided entirely by isSourceApproved() (approvedSources.ts),
+  // the one trusted, application-controlled policy. See that file's header
+  // comment for why (independent-review P1 fix).
+  if (!isSourceApproved(adapter.sourceId)) {
     throw new UnapprovedSourceError(adapter.sourceId);
   }
 

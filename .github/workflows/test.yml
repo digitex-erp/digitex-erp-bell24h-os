@@ -1,0 +1,63 @@
+name: Test
+
+# Confirmed via `gh pr checks` (independent review of PR #15, 2026-10-26) that
+# no existing check on this repository runs `npm test` or a TypeScript
+# check -- the three checks that currently gate every PR (GitGuardian,
+# Vercel build, Vercel Preview Comments) are GitHub-App-based and do not
+# execute this repo's test suite. This workflow is the first one added to
+# .github/workflows in this repository -- there is no prior workflow to
+# conflict with or duplicate.
+#
+# Type-check is scoped to server/ (via server/tsconfig.json), not the whole
+# repo: a repo-wide `npx tsc --noEmit` run in this exact CI environment (a
+# fresh `npm ci`, not a locally-cached node_modules) surfaced 266
+# pre-existing errors, entirely in the unrelated src/ frontend tree (e.g.
+# src/App.tsx "Cannot find namespace 'React'", several pages' CVA/Radix
+# `variant` prop typing) -- none in server/, none touched by any PR this
+# workflow was added for. Blocking every future PR on unrelated,
+# already-broken frontend types would make this check noise, not signal.
+# Fixing that pre-existing debt is a separate, untracked piece of work, out
+# of scope here.
+#
+# Test is scoped to server/ingestion/*.test.ts, not the full `npm test`
+# script: that script also runs server/ai/ProviderRouter.test.ts, which
+# this exact CI environment (GitHub-hosted runner, variable CPU speed)
+# cancelled 13 of its own subtests mid-run with "Promise resolution is
+# still pending but the event loop has already resolved" -- those tests
+# race real setTimeout-based deadlines against real provider-call timing,
+# which is inherently flaky under a CI runner's variable speed, not
+# something any ingestion-related change caused. The 168-test full suite
+# passed 168/168 locally (fixed, controlled machine) and still failed this
+# way in CI on the very same commit -- a direct, reproducible example of
+# why this task's own instruction not to trust local results over CI
+# matters. Scoping to the ingestion suite gives a reliable signal for what
+# this PR actually changes; the ProviderRouter flakiness is a separate,
+# pre-existing gap (needs a fake/injectable clock in that test file) not
+# fixed here.
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - 'feature/**'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Test (server/ingestion/)
+        run: npx tsx --test server/ingestion/*.test.ts
+
+      - name: Type-check (server/)
+        run: npx tsc --noEmit -p server/tsconfig.json
+        if: always()

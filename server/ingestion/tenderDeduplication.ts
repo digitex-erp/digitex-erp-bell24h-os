@@ -34,6 +34,12 @@ const COMPARABLE_FIELDS: (keyof NormalizedTenderRecord)[] = [
   "location",
   "currency",
   "estimatedValue",
+  // Independent-review P2 fix: a corrigendum that only attaches a new/changed
+  // document (e.g. a revised specification PDF) with no other field changing
+  // was previously invisible to this comparison -- fieldsDiffer() already
+  // handles array comparison correctly (JSON.stringify), this field was
+  // simply missing from the list.
+  "sourceDocumentRefs",
 ];
 
 function fieldsDiffer(a: unknown, b: unknown): boolean {

@@ -278,10 +278,18 @@ export function normalizeTenderRecord(raw: SourceRetrievalResult): NormalizedTen
     });
   }
 
+  // Independent-review P2 fix: `dedup.strength === "weak"` used to live
+  // INSIDE the warnings.some() callback, where it was only evaluated once
+  // per existing warning -- if `warnings` were ever empty while dedup
+  // strength was weak, .some() on an empty array returns false unconditionally
+  // and this clause would silently fail to fire. Hoisted to its own
+  // independent clause so it can never depend on warnings already being
+  // non-empty.
   const hasBlockingError =
     raw.outcome === "error" ||
     !urlCheck.ok ||
-    warnings.some((w) => w.code === "MISSING_REQUIRED" || w.code === "UNPARSEABLE_DATE" || dedup.strength === "weak");
+    dedup.strength === "weak" ||
+    warnings.some((w) => w.code === "MISSING_REQUIRED" || w.code === "UNPARSEABLE_DATE");
 
   return {
     id: dedup.key,
