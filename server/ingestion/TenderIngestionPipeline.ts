@@ -23,24 +23,19 @@ import { emitAuditEvent } from "../audit.js";
 import type { NormalizedTenderRecord, SourceAdapter, SourceRetrievalResult } from "./TenderTypes.js";
 import { normalizeTenderRecord } from "./tenderValidation.js";
 import { compareForReingestion, type ReingestionComparison } from "./tenderDeduplication.js";
-
-/**
- * Explicit allow-list, mirroring docs/audits/PROCUREMENT_PORTAL_ACCESS_REGISTER.md's
- * feasibility classification. Only a source explicitly marked APPROVED there
- * may run through this pipeline -- everything else (including every real
- * portal examined so far: cppp, gem, maharashtra_etenders, all currently
- * UNVERIFIED or worse per that register) is rejected here by construction,
- * not by relying on a caller to remember to check first.
- *
- * Empty in this phase deliberately: no real source has cleared legal/ToS
- * review yet (see the register). Test fixtures use a source id that is
- * explicitly added to this set only inside the test file itself, never here.
- */
-export const APPROVED_SOURCE_IDS: ReadonlySet<string> = new Set([]);
+import {
+  PRODUCTION_SOURCE_APPROVAL_POLICY,
+  __createApprovalPolicyForTests,
+  type SourceApprovalPolicy,
+} from "./sourceApprovalPolicy.js";
 
 export class UnapprovedSourceError extends Error {
-  constructor(sourceId: string) {
-    super(`Source "${sourceId}" is not in APPROVED_SOURCE_IDS -- refusing to ingest. See docs/audits/PROCUREMENT_PORTAL_ACCESS_REGISTER.md.`);
+  constructor(sourceId: unknown) {
+    const shown = typeof sourceId === "string" ? sourceId : `<${typeof sourceId}>`;
+    super(
+      `Source "${shown}" is not approved -- refusing to ingest. ` +
+        `The approved-source policy is authoritative and empty by default; see docs/audits/PROCUREMENT_PORTAL_ACCESS_REGISTER.md.`,
+    );
     this.name = "UnapprovedSourceError";
   }
 }
@@ -59,8 +54,9 @@ export interface IngestOptions {
   organizationId: string | null;
   /** Keyed by dedup key -- the caller's current known state, if any. This pipeline does not read a database itself. */
   priorRecords?: Map<string, NormalizedTenderRecord>;
-  /** Override for testing only -- production code must rely on the module-level APPROVED_SOURCE_IDS default. */
-  approvedSourceIds?: ReadonlySet<string>;
+  // NOTE: there is deliberately NO approval-policy field here. A caller must
+  // not be able to authorize its own source. See sourceApprovalPolicy.ts's
+  // header for why (this closed an empirically-reproduced P0 bypass).
 }
 
 /**
@@ -74,16 +70,31 @@ export interface IngestOptions {
  * failure the caller's retry/backoff logic should handle, not a per-record
  * validation concern.
  */
-export async function ingestFromSource(
+function createIngestor(policy: SourceApprovalPolicy) {
+  return async function ingest(
+    adapter: SourceAdapter,
+    options: IngestOptions,
+    cursor?: string | null,
+  ): Promise<PersistableIngestionResult[]> {
+    // Approval is checked BEFORE adapter.fetchPage() -- a rejected source is
+    // never fetched, so an unapproved portal is never contacted even once.
+    // `adapter?.sourceId` rather than `adapter.sourceId` so a malformed
+    // adapter is rejected by the policy (which rejects non-strings) instead
+    // of throwing a TypeError here.
+    const sourceId = (adapter as SourceAdapter | undefined)?.sourceId;
+    if (!policy.isApproved(sourceId)) {
+      throw new UnapprovedSourceError(sourceId);
+    }
+
+    return runIngestion(adapter, options, cursor);
+  };
+}
+
+async function runIngestion(
   adapter: SourceAdapter,
   options: IngestOptions,
   cursor?: string | null,
 ): Promise<PersistableIngestionResult[]> {
-  const approved = options.approvedSourceIds ?? APPROVED_SOURCE_IDS;
-  if (!approved.has(adapter.sourceId)) {
-    throw new UnapprovedSourceError(adapter.sourceId);
-  }
-
   const rawResults: SourceRetrievalResult[] = await adapter.fetchPage(cursor ?? null);
   const priorRecords = options.priorRecords ?? new Map<string, NormalizedTenderRecord>();
   const results: PersistableIngestionResult[] = [];
@@ -127,6 +138,31 @@ export async function ingestFromSource(
   }
 
   return results;
+}
+
+/**
+ * THE production ingestion entry point.
+ *
+ * Its signature accepts no approval policy, by design: there is no argument
+ * through which a request, job payload, or caller-supplied option object
+ * could authorize a source. Approval comes solely from
+ * PRODUCTION_SOURCE_APPROVAL_POLICY, which is built from a module-private,
+ * frozen, never-exported list (see sourceApprovalPolicy.ts).
+ */
+export const ingestFromSource = createIngestor(PRODUCTION_SOURCE_APPROVAL_POLICY);
+
+/**
+ * TEST-ONLY ingestor factory. Lets the test suite exercise the full pipeline
+ * against a fixture source without adding that fixture to the authoritative
+ * production policy.
+ *
+ * Not reachable from any request path -- `ingestFromSource` above is what a
+ * request calls, and it has no policy parameter. The underlying
+ * `__createApprovalPolicyForTests` additionally refuses to run when
+ * NODE_ENV === "production".
+ */
+export function __createIngestorForTests(approvedSourceIds: readonly string[]) {
+  return createIngestor(__createApprovalPolicyForTests(approvedSourceIds));
 }
 
 /**

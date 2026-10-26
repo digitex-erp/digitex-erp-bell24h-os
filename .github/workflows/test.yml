@@ -1,0 +1,109 @@
+name: Tests and Type Check
+
+# Closes a real gap: this repository had NO .github/workflows directory at
+# all, so no pull request had ever had its test suite executed by CI. The
+# three checks that do run on PRs (GitGuardian, Vercel build, Vercel Preview
+# Comments) never invoke `npm test` or `tsc`, so every "N/N passing" figure in
+# this repository's PR history is a locally-run result only.
+#
+# `tests` and `typecheck` are SEPARATE jobs on purpose. They were originally
+# sequential steps in one job, which meant the type-check failing first
+# prevented the test suite from running at all -- so the question "do the
+# tests actually pass in CI?" could not be answered. Split, each reports
+# independently.
+
+on:
+  # No `branches:` filter on pull_request, deliberately. That filter matches
+  # the PR's BASE branch, and this repository uses stacked PRs whose bases are
+  # other feature branches (e.g. PR #16 -> feature/tender-ingestion-foundation,
+  # PRs #7/#8 -> feature/communication-hub). An allow-list of long-lived bases
+  # silently skips exactly those PRs -- verified the hard way: the first
+  # version of this workflow listed only main + feature/communication-hub and
+  # did not trigger on PR #16 at all. Every PR runs these checks.
+  pull_request:
+  push:
+    branches:
+      - main
+      - feature/communication-hub
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: npm test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history: the whitespace step below uses a three-dot diff,
+          # which needs a real merge base. With the default shallow clone
+          # (depth 1) that step fails with "no merge base" / exit 128 --
+          # observed on this very workflow before this was added.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          # Matches the Node version the Vercel project reports (24.x).
+          node-version: '24'
+          cache: 'npm'
+
+      # `npm ci` installs exactly what package-lock.json pins, from a clean
+      # slate. This is stricter than a local `node_modules` that may have
+      # accumulated packages over time -- see the typecheck job's note.
+      - name: Install dependencies
+        run: npm ci
+
+      # node:test exits non-zero when any test fails (verified: exit 1 on a
+      # deliberately failing test), so a test failure fails this job.
+      - name: Run tests
+        run: npm test
+
+      # Catches trailing whitespace / conflict markers in this PR's own diff.
+      - name: Whitespace and conflict-marker check
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch --no-tags origin "${{ github.base_ref }}"
+          git diff --check "origin/${{ github.base_ref }}"...HEAD
+
+  typecheck:
+    name: tsc --noEmit
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      # KNOWN TO FAIL TODAY, for a pre-existing reason unrelated to any single
+      # PR -- and that failure is the point of running it.
+      #
+      # `@types/react` and `@types/react-dom` are NOT declared in
+      # package.json and are NOT in package-lock.json, even though the repo
+      # targets React 19 and uses JSX throughout `src/`. A local `tsc` appears
+      # clean only because TypeScript walks parent directories and finds a
+      # stray copy outside the repository (confirmed via
+      # `tsc --listFilesOnly`: it resolves C:/Users/<user>/node_modules/@types/react).
+      # From a clean install -- CI, a fresh clone, a new machine -- the check
+      # fails with "Cannot find namespace 'React'" plus knock-on
+      # cva/VariantProps prop errors in src/pages/*.tsx.
+      #
+      # Deliberately NOT suppressed, NOT scoped down, and NOT marked
+      # continue-on-error: a check that cannot fail is not enforcement, and
+      # hiding this would recreate the exact "passes locally, unverified in
+      # CI" problem this workflow exists to end.
+      #
+      # Fix is a dependency change (add both @types packages + refresh the
+      # lockfile), which is out of scope for the PR that introduced this
+      # workflow. Strong evidence it is sufficient: with those types present
+      # via the parent directory, local `tsc --noEmit` reports zero errors.
+      - name: Type check
+        run: npm run lint

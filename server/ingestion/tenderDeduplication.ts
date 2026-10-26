@@ -34,10 +34,46 @@ const COMPARABLE_FIELDS: (keyof NormalizedTenderRecord)[] = [
   "location",
   "currency",
   "estimatedValue",
+  // P2-A fix: a corrigendum that only attaches a revised specification
+  // document changes nothing else on the notice. Without this field, such an
+  // amendment was reported as `changed: false` / "unchanged" -- a real
+  // content change silently missed by the only update-detection mechanism
+  // this phase has.
+  "sourceDocumentRefs",
 ];
 
-function fieldsDiffer(a: unknown, b: unknown): boolean {
-  if (Array.isArray(a) && Array.isArray(b)) return JSON.stringify(a) !== JSON.stringify(b);
+/**
+ * DOCUMENTED COMPARISON RULE for `sourceDocumentRefs`:
+ *
+ * Compared as an unordered SET of unique values, not as an ordered list.
+ * Rationale: a portal re-serving the same attachments in a different order
+ * (common when a listing page is regenerated) is not a substantive change to
+ * the notice, and flagging it would produce update churn with no reviewer
+ * value. Adding, removing, or replacing a reference IS a change.
+ *
+ * Consequences, stated explicitly so the tradeoff is visible rather than
+ * implicit:
+ *   - Reorder only            -> NOT a change.
+ *   - Duplicate added/removed -> NOT a change (compared as unique values).
+ *   - Any new/removed URL     -> IS a change.
+ *   - [] vs []                -> NOT a change (both "no documents known").
+ *
+ * All other fields use strict `!==` identity comparison.
+ */
+function documentRefsDiffer(a: unknown, b: unknown): boolean {
+  const toSet = (v: unknown): Set<string> =>
+    new Set(Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
+  const setA = toSet(a);
+  const setB = toSet(b);
+  if (setA.size !== setB.size) return true;
+  for (const value of setA) {
+    if (!setB.has(value)) return true;
+  }
+  return false;
+}
+
+function fieldsDiffer(field: keyof NormalizedTenderRecord, a: unknown, b: unknown): boolean {
+  if (field === "sourceDocumentRefs") return documentRefsDiffer(a, b);
   return a !== b;
 }
 
@@ -57,7 +93,7 @@ export function compareForReingestion(
 
   const changedFields: string[] = [];
   for (const field of COMPARABLE_FIELDS) {
-    if (fieldsDiffer(existing[field], incoming[field])) {
+    if (fieldsDiffer(field, existing[field], incoming[field])) {
       changedFields.push(field as string);
     }
   }

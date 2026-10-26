@@ -278,10 +278,21 @@ export function normalizeTenderRecord(raw: SourceRetrievalResult): NormalizedTen
     });
   }
 
-  const hasBlockingError =
-    raw.outcome === "error" ||
-    !urlCheck.ok ||
-    warnings.some((w) => w.code === "MISSING_REQUIRED" || w.code === "UNPARSEABLE_DATE" || dedup.strength === "weak");
+  // P2-B fix: each blocking condition is now its own explicit, independently
+  // readable clause. Previously `dedup.strength === "weak"` was nested INSIDE
+  // the `.some()` callback, where it was evaluated per-existing-warning --
+  // so on an empty `warnings` array `.some()` would short-circuit to false
+  // and a weak-key record would NOT have been flagged. That was correct only
+  // by incidental coupling (a weak key always happened to produce another
+  // warning first); it is now correct by construction.
+  const hasBlockingWarning = warnings.some(
+    (w) => w.code === "MISSING_REQUIRED" || w.code === "UNPARSEABLE_DATE",
+  );
+  const hasRetrievalFailure = raw.outcome === "error";
+  const hasInvalidSourceUrl = !urlCheck.ok;
+  const hasWeakIdentity = dedup.strength === "weak";
+
+  const hasBlockingError = hasRetrievalFailure || hasInvalidSourceUrl || hasBlockingWarning || hasWeakIdentity;
 
   return {
     id: dedup.key,
