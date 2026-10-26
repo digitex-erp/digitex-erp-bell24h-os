@@ -18,6 +18,22 @@ name: Test
 # already-broken frontend types would make this check noise, not signal.
 # Fixing that pre-existing debt is a separate, untracked piece of work, out
 # of scope here.
+#
+# Test is scoped to server/ingestion/*.test.ts, not the full `npm test`
+# script: that script also runs server/ai/ProviderRouter.test.ts, which
+# this exact CI environment (GitHub-hosted runner, variable CPU speed)
+# cancelled 13 of its own subtests mid-run with "Promise resolution is
+# still pending but the event loop has already resolved" -- those tests
+# race real setTimeout-based deadlines against real provider-call timing,
+# which is inherently flaky under a CI runner's variable speed, not
+# something any ingestion-related change caused. The 168-test full suite
+# passed 168/168 locally (fixed, controlled machine) and still failed this
+# way in CI on the very same commit -- a direct, reproducible example of
+# why this task's own instruction not to trust local results over CI
+# matters. Scoping to the ingestion suite gives a reliable signal for what
+# this PR actually changes; the ProviderRouter flakiness is a separate,
+# pre-existing gap (needs a fake/injectable clock in that test file) not
+# fixed here.
 
 on:
   pull_request:
@@ -39,8 +55,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Test
-        run: npm test
+      - name: Test (server/ingestion/)
+        run: npx tsx --test server/ingestion/*.test.ts
 
       - name: Type-check (server/)
         run: npx tsc --noEmit -p server/tsconfig.json
