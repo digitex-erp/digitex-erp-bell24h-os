@@ -400,6 +400,43 @@ export function computePerAttemptCapMs(
 }
 
 /**
+ * Equivalent to `AbortSignal.timeout(ms)`, but with a cancelable underlying
+ * timer. `AbortSignal.timeout()`'s own internal timer is NOT exposed to the
+ * caller and keeps the event loop alive for the FULL original duration even
+ * when the operation it's guarding finishes long before the deadline — this
+ * is a documented Node.js/web-platform behavior, not a bug in the caller.
+ *
+ * Found via a real CI failure (not a hypothetical): `ProviderRouter.test.ts`
+ * exercises this router with intentionally short deadlines (10-220ms) to
+ * keep the suite fast. Under a loaded/slower CI runner, enough of these
+ * short-lived-but-never-cleared `AbortSignal.timeout()` timers piled up
+ * across the file that Node's test runner detected still-pending work after
+ * the file's own tests had finished, logged "Promise resolution is still
+ * pending but the event loop has already resolved", and cascade-cancelled
+ * every subsequent test in the file (`cancelledByParent`) — 13 of them, in
+ * one observed run. This never surfaced locally on a fast, idle machine,
+ * which is itself the known signature of a leaked-timer/dangling-timer bug,
+ * not a flaky assertion.
+ *
+ * Every provider adapter already treats `AbortError` and `TimeoutError`
+ * identically (see e.g. NvidiaProvider.ts's own `err?.name === "AbortError"
+ * || err?.name === "TimeoutError"` check) — so a standard `AbortController`
+ * abort is handled identically to `AbortSignal.timeout()`'s own abort by
+ * every downstream call site. `dispose()` MUST be called once the guarded
+ * operation has settled (success, failure, or abort) — every call site
+ * below does so in a `finally` block so cleanup happens on every path,
+ * including an early `return` on success.
+ */
+function createDisposableTimeoutSignal(ms: number): { signal: AbortSignal; dispose: () => void } {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  return {
+    signal: controller.signal,
+    dispose: () => clearTimeout(timer),
+  };
+}
+
+/**
  * D4.4.1: after the loop completes naturally — every configured candidate
  * was actually attempted, stoppedDueToDeadline is false — the final failure
  * can still be the shared deadline's fault rather than an independent
@@ -519,7 +556,7 @@ export async function routeText(
       stoppedDueToDeadline = true;
       break; // deadline exceeded; no further candidates attempted
     }
-    const signal = AbortSignal.timeout(perAttemptCapMs);
+    const { signal, dispose: disposeTimeoutSignal } = createDisposableTimeoutSignal(perAttemptCapMs);
 
     const startedAt = Date.now();
     attemptsMade++;
@@ -615,6 +652,11 @@ export async function routeText(
       if (opts.allowFallback === false) {
         throw err;
       }
+    } finally {
+      // Guaranteed on every path -- early return on success, caught error
+      // and continue, or rethrow above. See createDisposableTimeoutSignal's
+      // own doc comment for why this is required and what it fixes.
+      disposeTimeoutSignal();
     }
   }
 
@@ -664,7 +706,7 @@ export async function routeJson<T>(
       stoppedDueToDeadline = true;
       break; // deadline exceeded; no further candidates attempted
     }
-    const signal = AbortSignal.timeout(perAttemptCapMs);
+    const { signal, dispose: disposeTimeoutSignal } = createDisposableTimeoutSignal(perAttemptCapMs);
 
     const startedAt = Date.now();
     attemptsMade++;
@@ -733,6 +775,8 @@ export async function routeJson<T>(
       if (opts.allowFallback === false) {
         throw err;
       }
+    } finally {
+      disposeTimeoutSignal();
     }
   }
 
