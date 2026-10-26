@@ -37,6 +37,12 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history: the whitespace step below uses a three-dot diff,
+          # which needs a real merge base. With the default shallow clone
+          # (depth 1) that step fails with "no merge base" / exit 128 --
+          # observed on this very workflow before this was added.
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -59,7 +65,7 @@ jobs:
       - name: Whitespace and conflict-marker check
         if: github.event_name == 'pull_request'
         run: |
-          git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
+          git fetch --no-tags origin "${{ github.base_ref }}"
           git diff --check "origin/${{ github.base_ref }}"...HEAD
 
   typecheck:
