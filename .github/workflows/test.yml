@@ -12,10 +12,14 @@ name: Tests and Type Check
 # did not exist before this change).
 
 on:
+  # No `branches:` filter on pull_request, deliberately. That filter matches
+  # the PR's BASE branch, and this repository uses stacked PRs whose bases are
+  # other feature branches (e.g. PR #16 -> feature/tender-ingestion-foundation,
+  # PRs #7/#8 -> feature/communication-hub). An allow-list of long-lived bases
+  # silently skips exactly those PRs -- verified the hard way: the first
+  # version of this workflow listed only main + feature/communication-hub and
+  # did not trigger on PR #16 at all. Every PR runs these checks.
   pull_request:
-    branches:
-      - main
-      - feature/communication-hub
   push:
     branches:
       - main
