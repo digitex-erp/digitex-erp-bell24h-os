@@ -14,6 +14,7 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Search, BrainCircuit, Activity, Settings2, Plus, Edit, Trash2, Power, History, Settings, Play } from "lucide-react";
 import { AIManagerService } from "@/modules/ai-providers/AiProviderService";
+import { buildProviderUpdatePayload } from "./providerUpdatePayload";
 
 export function AiProvidersPage() {
   const { user } = useAuthStore();
@@ -102,15 +103,14 @@ export function AiProvidersPage() {
         // table — see AiProviderService.ts header comment and
         // docs/project/AA-01-TICKETS.md (AA-01-004). Provider key configuration is
         // disabled in the UI below pending a server-side secret-storage endpoint.
-        const { api_key, ...formDataWithoutKey } = formData;
-        const payload = {
-          ...formDataWithoutKey,
-          organization_id: profile.organization_id
-        };
-
         if (editingProvider) {
-          await supabase.from('ai_providers').update(payload).eq('id', editingProvider.id);
+          await supabase.from('ai_providers').update(buildProviderUpdatePayload(formData)).eq('id', editingProvider.id);
         } else {
+          const { api_key, ...formDataWithoutKey } = formData;
+          const payload = {
+            ...formDataWithoutKey,
+            organization_id: profile.organization_id
+          };
           await supabase.from('ai_providers').insert(payload);
         }
         
