@@ -164,11 +164,9 @@ describe("createRequireOperatorAuth", () => {
     assert.equal(nextCalled, true, "an ADMIN must be allowed through");
   });
 
-  test("the development-mode no-auth-header bypass is NEVER reachable when NODE_ENV=production", async () => {
+  test("no-auth-header request is rejected in production (no bypass exists)", async () => {
     process.env.NODE_ENV = "production";
     delete process.env.BELL24H_VYAPARSETHU_SERVICE_TOKEN;
-    // No Authorization header at all -- in dev mode this would bypass
-    // straight through; in production it must still require real auth.
     const guard = createRequireOperatorAuth({
       getPool: () => fakePool({}),
       authenticate: stubAuthenticate("unauthenticated"),
@@ -177,24 +175,59 @@ describe("createRequireOperatorAuth", () => {
     const { res, getStatus } = fakeRes();
     let nextCalled = false;
     await guard(req, res, (() => { nextCalled = true; }) as NextFunction);
-    assert.equal(nextCalled, false, "production mode must never grant the dev-mode bypass");
+    assert.equal(nextCalled, false, "production mode must never grant unauthenticated access");
     assert.equal(getStatus(), 401);
   });
 
-  test("the development-mode bypass DOES work outside production, as intended (existing behavior preserved)", async () => {
+  test("the removed development-mode bypass does NOT exist: a no-header request outside production is also rejected, not silently granted", async () => {
+    // This is the regression guard for Issue B (the previously-reported
+    // dev-mode no-header bypass). It asserts the OPPOSITE of what the old
+    // suite asserted here -- the old test proved the bypass worked "as
+    // intended"; this one proves it no longer exists at all, regardless of
+    // NODE_ENV. `authenticate` is a real stub (not a throwing one) so this
+    // test fails loudly, not by exception, if any environment-gated bypass
+    // is ever reintroduced.
     process.env.NODE_ENV = "development";
     delete process.env.BELL24H_VYAPARSETHU_SERVICE_TOKEN;
-    const guard = createRequireOperatorAuth({
-      getPool: () => fakePool({}),
-      // authenticate must never even be consulted on this path.
-      authenticate: () => { throw new Error("authenticate should not be called on the dev-mode bypass path"); },
-    });
-    const req = fakeReq(); // no headers
-    const { res } = fakeRes();
-    let nextCalled = false;
-    await guard(req, res, (() => { nextCalled = true; }) as NextFunction);
-    assert.equal(nextCalled, true);
-    process.env.NODE_ENV = "production"; // restore for subsequent tests
+    try {
+      const guard = createRequireOperatorAuth({
+        getPool: () => fakePool({}),
+        authenticate: stubAuthenticate("unauthenticated"),
+      });
+      const req = fakeReq(); // no headers
+      const { res, getStatus } = fakeRes();
+      let nextCalled = false;
+      await guard(req, res, (() => { nextCalled = true; }) as NextFunction);
+      assert.equal(nextCalled, false, "development mode must not silently grant operator access");
+      assert.equal(getStatus(), 401);
+    } finally {
+      process.env.NODE_ENV = "production"; // restore for subsequent tests
+    }
+  });
+
+  test("the removed bypass is also absent with NODE_ENV entirely unset", async () => {
+    // Belt-and-suspenders: the old bypass's condition was `!== "production"`,
+    // which is also true when NODE_ENV is unset entirely (e.g. a bare `node`
+    // invocation with no env configured) -- the single most likely way a
+    // real deployment could end up on the unsafe side of that check by
+    // accident. Confirm there is no residual special-casing of this value.
+    const original = process.env.NODE_ENV;
+    delete process.env.NODE_ENV;
+    delete process.env.BELL24H_VYAPARSETHU_SERVICE_TOKEN;
+    try {
+      const guard = createRequireOperatorAuth({
+        getPool: () => fakePool({}),
+        authenticate: stubAuthenticate("unauthenticated"),
+      });
+      const req = fakeReq();
+      const { res, getStatus } = fakeRes();
+      let nextCalled = false;
+      await guard(req, res, (() => { nextCalled = true; }) as NextFunction);
+      assert.equal(nextCalled, false);
+      assert.equal(getStatus(), 401);
+    } finally {
+      process.env.NODE_ENV = original;
+    }
   });
 
   test("the service-token path grants access without a per-user role check, and legitimate operator access via it is unaffected", async () => {
@@ -215,7 +248,7 @@ describe("createRequireOperatorAuth", () => {
     }
   });
 
-  test("a wrong service token in production, with no further auth, is rejected (not silently treated as the dev bypass)", async () => {
+  test("a wrong service token in production, with no further auth, is rejected (not silently treated as a bypass)", async () => {
     process.env.NODE_ENV = "production";
     process.env.BELL24H_VYAPARSETHU_SERVICE_TOKEN = "correct-token-not-real";
     try {
@@ -229,6 +262,77 @@ describe("createRequireOperatorAuth", () => {
       await guard(req, res, (() => { nextCalled = true; }) as NextFunction);
       assert.equal(nextCalled, false);
       assert.equal(getStatus(), 401);
+    } finally {
+      delete process.env.BELL24H_VYAPARSETHU_SERVICE_TOKEN;
+    }
+  });
+
+  test("a service token of a very different length than expected is rejected without throwing (Issue A regression guard)", async () => {
+    // secureEquals compares fixed-length SHA-256 digests specifically so a
+    // raw length mismatch between the provided and expected value can never
+    // throw (crypto.timingSafeEqual throws on unequal-length buffers) and
+    // can never be distinguished from any other mismatch by response
+    // timing. Exercise both a much-shorter and a much-longer provided value.
+    process.env.NODE_ENV = "production";
+    process.env.BELL24H_VYAPARSETHU_SERVICE_TOKEN = "a-reasonably-long-not-real-service-token-value";
+    try {
+      const guard = createRequireOperatorAuth({
+        getPool: () => fakePool({}),
+        authenticate: stubAuthenticate("unauthenticated"),
+      });
+      for (const provided of ["Bearer x", `Bearer ${"y".repeat(500)}`]) {
+        const req = fakeReq({ authorization: provided });
+        const { res, getStatus } = fakeRes();
+        let nextCalled = false;
+        await assert.doesNotReject(
+          async () => {
+            await guard(req, res, (() => { nextCalled = true; }) as NextFunction);
+          },
+          `a ${provided.length}-char provided value must not throw`,
+        );
+        assert.equal(nextCalled, false);
+        assert.equal(getStatus(), 401);
+      }
+    } finally {
+      delete process.env.BELL24H_VYAPARSETHU_SERVICE_TOKEN;
+    }
+  });
+
+  test("an empty Authorization header is never treated as a service-token match, even with no configured token", async () => {
+    process.env.NODE_ENV = "production";
+    delete process.env.BELL24H_VYAPARSETHU_SERVICE_TOKEN;
+    const guard = createRequireOperatorAuth({
+      getPool: () => fakePool({}),
+      authenticate: stubAuthenticate("unauthenticated"),
+    });
+    const req = fakeReq({ authorization: "" });
+    const { res, getStatus } = fakeRes();
+    let nextCalled = false;
+    await guard(req, res, (() => { nextCalled = true; }) as NextFunction);
+    assert.equal(nextCalled, false);
+    assert.equal(getStatus(), 401);
+  });
+
+  test("no response this middleware produces ever contains the configured service-token value", async () => {
+    // This middleware itself never calls res.json()/res.status() directly on
+    // any rejection path (every rejection is produced by `authenticate`'s own
+    // canonical error response) -- this test asserts that invariant holds
+    // for the one path this middleware DOES fully control (a wrong-token
+    // attempt), by checking the stub's recorded body never echoes the
+    // configured secret.
+    process.env.NODE_ENV = "production";
+    const secret = "do-not-leak-this-value-12345";
+    process.env.BELL24H_VYAPARSETHU_SERVICE_TOKEN = secret;
+    try {
+      const guard = createRequireOperatorAuth({
+        getPool: () => fakePool({}),
+        authenticate: stubAuthenticate("unauthenticated"),
+      });
+      const req = fakeReq({ authorization: "Bearer wrong-value-entirely" });
+      const { res, getBody } = fakeRes();
+      await guard(req, res, (() => {}) as NextFunction);
+      const serialized = JSON.stringify(getBody());
+      assert.ok(!serialized.includes(secret), "the configured service token must never appear in any response body");
     } finally {
       delete process.env.BELL24H_VYAPARSETHU_SERVICE_TOKEN;
     }

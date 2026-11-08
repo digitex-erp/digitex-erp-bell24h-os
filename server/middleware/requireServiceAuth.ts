@@ -44,8 +44,12 @@ function digest(value: string): Buffer {
  * Constant-time comparison. Compares fixed-length SHA-256 digests rather than the raw
  * strings, so this is safe even when the provided and expected values differ in
  * length (`timingSafeEqual` throws on unequal-length buffers otherwise).
+ *
+ * Exported so other secret-token checks in this codebase (e.g.
+ * requireOperatorAuth.ts's own service-token path) reuse this exact
+ * implementation instead of each re-inventing their own.
  */
-function secureEquals(a: string, b: string): boolean {
+export function secureEquals(a: string, b: string): boolean {
   return timingSafeEqual(digest(a), digest(b));
 }
 
