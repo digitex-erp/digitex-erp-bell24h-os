@@ -19,12 +19,14 @@ import path from "node:path";
 
 const MIGRATION_PATH = path.resolve(import.meta.dirname, "..", "..", "..", "harden_ai_providers_credentials.sql");
 
-/** Strips `-- ...` line comments so regex checks below match only real SQL, never prose that happens to mention a keyword like GRANT/TO/anon while explaining the migration's rationale. */
+/** Strips `-- ...` line comments so regex checks below match only real SQL, never prose that happens to mention a keyword like GRANT/TO/anon while explaining the migration's rationale.
+ * Matches up to (but not including) a CR or LF directly, rather than
+ * splitting on "\n" and relying on `.`/`$`, because `.` excludes `\r` as a
+ * line terminator -- on a CRLF checkout (the default on Windows), a
+ * trailing `\r` after `.*` means `$` never reaches true end-of-string, so
+ * the comment is silently left unstripped. */
 function stripSqlComments(text: string): string {
-  return text
-    .split("\n")
-    .map((line) => line.replace(/--.*$/, ""))
-    .join("\n");
+  return text.replace(/--[^\r\n]*/g, "");
 }
 const sql = stripSqlComments(fs.readFileSync(MIGRATION_PATH, "utf8"));
 
