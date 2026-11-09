@@ -549,6 +549,25 @@ describe("createServiceRateLimit", () => {
     // Postgres engine, real anon/authenticated roles, the actual migration
     // SQL applied verbatim, then switch role and attempt real queries --
     // not a mock of what a grant "should" do.
+    //
+    // TASK 13G fix (independent review, Task 13F, Finding 1): plain PGlite
+    // is vanilla Postgres and denies an unprivileged role by default --
+    // with or without this migration's own REVOKE ever running. Supabase's
+    // real platform behavior is NOT "deny by default": it runs its own
+    // `ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO
+    // anon, authenticated, service_role` automatically on every new table,
+    // which is exactly what this migration's REVOKE exists to undo. Without
+    // reproducing that automatic grant here first, these tests could not
+    // tell "the REVOKE is present and correct" apart from "the REVOKE is
+    // missing, broken, or misspelled" -- both looked identical (proven via
+    // mutation testing in Task 13F: all 5 tests below passed unmodified
+    // against a migration with zero REVOKE/RLS statements at all).
+    // `ALTER DEFAULT PRIVILEGES` is itself a standard Postgres DDL feature
+    // (not a Supabase extension), so PGlite supports it directly -- set
+    // ONCE, before any table in this schema exists, it then applies
+    // automatically the moment the migration's own CREATE TABLE statements
+    // run, faithfully reproducing the platform behavior the migration's
+    // own comment describes, with no change to the migration file itself.
     let privDb: PGlite;
 
     before(async () => {
@@ -556,6 +575,7 @@ describe("createServiceRateLimit", () => {
       await privDb.exec(`
         CREATE ROLE anon;
         CREATE ROLE authenticated;
+        ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO anon, authenticated;
       `);
       await privDb.exec(migrationSql);
     });
@@ -619,5 +639,112 @@ describe("createServiceRateLimit", () => {
       const withoutComments = migrationSql.replace(/--[^\r\n]*/g, "");
       assert.ok(!withoutComments.includes("ai_providers"), "no actual SQL statement in this migration must reference the unrelated ai_providers table");
     });
+
+    // TASK 13G addition: a direct, unconditional check that RLS is actually
+    // enabled on both tables at the catalog level -- independent of which
+    // role has which privilege, and therefore meaningful regardless of the
+    // simulated-grant precondition above.
+    test("RLS is enabled (pg_class.relrowsecurity = true) on both rate-limit tables", async () => {
+      const result = await privDb.query<{ relname: string; relrowsecurity: boolean }>(
+        `SELECT relname, relrowsecurity FROM pg_class WHERE relname IN ('service_rate_limit_windows', 'service_concurrency_slots') ORDER BY relname`,
+      );
+      assert.equal(result.rows.length, 2, "both tables must exist in pg_class");
+      for (const row of result.rows) {
+        assert.equal(row.relrowsecurity, true, `${row.relname} must have row-level security enabled`);
+      }
+    });
+  });
+
+  // TASK 13G addition (independent review, Task 13F, Finding 1): proves RLS
+  // is a genuinely independent second layer, not just inert decoration
+  // alongside the REVOKE. Uses a SEPARATE PGlite instance where the
+  // migration's own REVOKE block is programmatically stripped before
+  // applying it -- simulating "the REVOKE was forgotten, reverted, or
+  // broken by a future change" -- while still simulating the Supabase
+  // default grant and keeping the migration's RLS statements intact.
+  // If RLS is truly doing independent work, anon/authenticated must still
+  // be unable to read or meaningfully write either table even though they
+  // now hold a real, non-revoked table-level grant.
+  describe("TASK 13G — RLS backstop is independently effective when REVOKE is bypassed (hardens Task 13F Finding 1)", () => {
+    let rlsOnlyDb: PGlite;
+
+    before(async () => {
+      rlsOnlyDb = new PGlite();
+      await rlsOnlyDb.exec(`
+        CREATE ROLE anon;
+        CREATE ROLE authenticated;
+        ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO anon, authenticated;
+      `);
+      // Strip exactly the migration's own REVOKE DO-block (the only DO
+      // block, and the only REVOKE statement, in this file) -- everything
+      // else, including both ENABLE ROW LEVEL SECURITY statements, is
+      // applied verbatim and unmodified.
+      const revokeBlockPattern = /DO \$\$[\s\S]*?REVOKE ALL[\s\S]*?END \$\$;/;
+      assert.ok(revokeBlockPattern.test(migrationSql), "expected to find exactly one REVOKE DO-block in the migration to strip for this scenario -- if this fails, the migration's structure changed and this test needs updating, not deleting");
+      const migrationWithoutRevoke = migrationSql.replace(revokeBlockPattern, "-- (REVOKE block intentionally removed for this test scenario)");
+      // Check for an actual REVOKE *statement*, not the word appearing in an
+      // unrelated explanatory comment (the RLS comment block that follows
+      // legitimately discusses "the REVOKE above") -- same comment-stripping
+      // technique already used elsewhere in this file for this exact class
+      // of check.
+      const withoutComments = migrationWithoutRevoke.replace(/--[^\r\n]*/g, "");
+      assert.ok(!withoutComments.includes("REVOKE"), "the stripped migration must contain no REVOKE statement at all");
+      assert.ok(withoutComments.includes("ENABLE ROW LEVEL SECURITY"), "the stripped migration must still enable RLS on both tables");
+      await rlsOnlyDb.exec(migrationWithoutRevoke);
+    });
+
+    after(async () => {
+      await rlsOnlyDb.close();
+    });
+
+    async function asRole<T>(role: "anon" | "authenticated", fn: () => Promise<T>): Promise<T> {
+      await rlsOnlyDb.exec(`SET ROLE ${role};`);
+      try {
+        return await fn();
+      } finally {
+        await rlsOnlyDb.exec(`RESET ROLE;`);
+      }
+    }
+
+    // Postgres RLS semantics, confirmed empirically during this task: with
+    // RLS enabled and zero policies, a role that DOES hold a real
+    // table-level grant gets SELECT/UPDATE/DELETE queries that succeed
+    // syntactically but touch zero rows (every row is filtered out by the
+    // absent policy) -- not a thrown "permission denied" error, which only
+    // comes from a missing table-level privilege. INSERT is the one
+    // exception: Postgres requires a satisfied WITH CHECK (or a FOR ALL
+    // policy) to insert at all, so with none defined it genuinely throws.
+    for (const table of ["service_rate_limit_windows", "service_concurrency_slots"] as const) {
+      for (const role of ["anon", "authenticated"] as const) {
+        test(`${role} SELECT on ${table} returns zero rows under RLS-only protection, even with a real table-level grant`, async () => {
+          const seedKey = `rls-seed-${table}-${role}`;
+          await rlsOnlyDb.query(`INSERT INTO ${table} (limiter_name, identity_key${table === "service_rate_limit_windows" ? ", window_start" : ""}) VALUES ($1, $1${table === "service_rate_limit_windows" ? ", 0" : ""})`, [seedKey]);
+          const result = await asRole(role, () => rlsOnlyDb.query(`SELECT * FROM ${table} WHERE identity_key = $1`, [seedKey]));
+          assert.equal(result.rows.length, 0, `${role} must see zero rows via RLS alone, despite holding a real SELECT grant`);
+        });
+
+        test(`${role} INSERT on ${table} is rejected under RLS-only protection, even with a real table-level grant`, async () => {
+          const insertSql =
+            table === "service_rate_limit_windows"
+              ? `INSERT INTO ${table} (limiter_name, identity_key, window_start) VALUES ('rls-insert-${role}', 'x', 1)`
+              : `INSERT INTO ${table} (limiter_name, identity_key) VALUES ('rls-insert-${role}', 'x')`;
+          await assert.rejects(() => asRole(role, () => rlsOnlyDb.query(insertSql)), /row-level security/i);
+        });
+
+        test(`${role} UPDATE/DELETE on ${table} affects zero rows under RLS-only protection, even with a real table-level grant`, async () => {
+          await rlsOnlyDb.query(`INSERT INTO ${table} (limiter_name, identity_key${table === "service_rate_limit_windows" ? ", window_start" : ""}) VALUES ('rls-dml-seed-${role}', 'rls-dml-seed-${role}'${table === "service_rate_limit_windows" ? ", 0" : ""})`);
+          const updateResult = await asRole(role, () =>
+            rlsOnlyDb.query(`UPDATE ${table} SET updated_at = now() WHERE identity_key = 'rls-dml-seed-${role}'`),
+          );
+          assert.equal((updateResult as any).affectedRows ?? 0, 0, `${role}'s UPDATE must affect zero rows via RLS alone`);
+          const deleteResult = await asRole(role, () => rlsOnlyDb.query(`DELETE FROM ${table} WHERE identity_key = 'rls-dml-seed-${role}'`));
+          assert.equal((deleteResult as any).affectedRows ?? 0, 0, `${role}'s DELETE must affect zero rows via RLS alone`);
+          // Confirm the row genuinely still exists -- the server-side
+          // connection (no role switch) never went through RLS at all.
+          const stillThere = await rlsOnlyDb.query(`SELECT * FROM ${table} WHERE identity_key = 'rls-dml-seed-${role}'`);
+          assert.equal(stillThere.rows.length, 1, "the seeded row must be untouched -- RLS silently filtered the UPDATE/DELETE, it did not actually modify anything");
+        });
+      }
+    }
   });
 });
