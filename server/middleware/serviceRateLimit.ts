@@ -247,12 +247,27 @@ export function createServiceRateLimit(opts: ServiceRateLimitOptions) {
       });
     }
 
-    // Release this request's concurrency slot once it finishes, regardless
-    // of success or failure, so the slot doesn't leak for the lifetime of
-    // the process. res.on("finish") fires once the response has actually
-    // been sent, covering both the success path and any error path the
-    // downstream route handler takes.
-    res.on("finish", () => {
+    // Release this request's concurrency slot exactly once, regardless of
+    // how the request ends, so the slot never leaks for the lifetime of
+    // the process.
+    //
+    // TASK 13C fix: this used to listen only for "finish" (fired once the
+    // response has actually been sent). Node's own documented HTTP
+    // semantics -- confirmed by direct reproduction during review -- mean
+    // "finish" never fires if the client disconnects or the connection is
+    // aborted before the response completes; only "close" fires in that
+    // case. Since service_concurrency_slots has no expiry mechanism, a
+    // slot leaked this way never self-heals -- it persists until a process
+    // restart. Listening for both events closes that gap, but naively
+    // doing so would double-decrement on the NORMAL path too, since "close"
+    // also fires after "finish" on an ordinary completed response (the
+    // underlying socket still closes eventually). `released` makes the
+    // actual release idempotent: whichever event fires first performs the
+    // decrement; the other is a no-op.
+    let released = false;
+    const releaseSlot = () => {
+      if (released) return;
+      released = true;
       pool
         .query(
           `UPDATE service_concurrency_slots SET active_count = GREATEST(active_count - 1, 0), updated_at = now()
@@ -271,7 +286,9 @@ export function createServiceRateLimit(opts: ServiceRateLimitOptions) {
             metadata: { limiter: opts.name, check: "concurrency_release", error: err instanceof Error ? err.message : "unknown" },
           });
         });
-    });
+    };
+    res.on("finish", releaseSlot);
+    res.on("close", releaseSlot);
 
     next();
   };

@@ -58,8 +58,53 @@ CREATE TABLE IF NOT EXISTS service_concurrency_slots (
   PRIMARY KEY (limiter_name, identity_key)
 );
 
--- No RLS needed on either table: both are written and read exclusively by
--- server-side code via the pooled service-role-equivalent connection
--- (getPool()), the same access path QueueManager/WorkerRegistry already
--- use -- never through PostgREST, never with an end-user's own token. No
--- browser code path, no anon/authenticated grant, touches either table.
+-- TASK 13C correction: the paragraph this replaces originally claimed "No
+-- RLS needed... no anon/authenticated grant touches either table" -- that
+-- claim was wrong, and contradicted this exact repository's own, already-
+-- merged evidence. harden_ai_providers_credentials.sql (PR #6) documents,
+-- as the confirmed reason IT needed a REVOKE despite no explicit GRANT
+-- appearing anywhere in this repo's tracked SQL: "Supabase applies its own
+-- platform-level default privileges (ALTER DEFAULT PRIVILEGES ... GRANT ALL
+-- ON TABLES TO anon, authenticated, service_role) to every new table in the
+-- public schema automatically." These two new tables are new tables in the
+-- public schema. The same platform default applies to them, for the same
+-- reason it applied to ai_providers before PR #6's fix -- not because any
+-- grant is explicit in this file, but because none needs to be for Supabase
+-- to add one automatically.
+--
+-- Unlike ai_providers, neither table here has ANY legitimate PostgREST
+-- consumer at all -- no browser code path reads or writes either one; both
+-- are written and read exclusively by server-side code via the pooled
+-- connection (getPool()), the same access path QueueManager/WorkerRegistry
+-- already use. So the fix is simpler than PR #6's: REVOKE everything from
+-- anon/authenticated and grant nothing back (PR #6 had to grant back a
+-- restricted column set to authenticated because ai_providers genuinely has
+-- browser-authenticated readers/writers; these tables do not).
+DO $$
+DECLARE
+    r TEXT;
+    t TEXT;
+BEGIN
+    FOREACH t IN ARRAY ARRAY['service_rate_limit_windows', 'service_concurrency_slots']
+    LOOP
+        FOREACH r IN ARRAY ARRAY['anon', 'authenticated']
+        LOOP
+            EXECUTE format('REVOKE ALL ON %I FROM %I', t, r);
+        END LOOP;
+    END LOOP;
+END $$;
+
+-- Defense in depth, independent of the REVOKE above: enable RLS on both
+-- tables with zero policies defined. Postgres denies ALL access by default
+-- once RLS is enabled and no policy grants anything -- so even if a future
+-- change re-grants a table privilege to anon/authenticated without
+-- re-reading this comment, RLS is a second, independent barrier that would
+-- still have to be separately and deliberately opened before either role
+-- could read or write a row. This does not replace the REVOKE above (per
+-- this task's own instruction: enabling RLS alone, while leaving incorrect
+-- table-level grants in place, would not be sufficient -- a role with a
+-- genuine table privilege and a permissive-by-default or missing RLS
+-- configuration could still reach these rows; the REVOKE is the primary
+-- control, RLS is the secondary one).
+ALTER TABLE service_rate_limit_windows ENABLE ROW LEVEL SECURITY;
+ALTER TABLE service_concurrency_slots ENABLE ROW LEVEL SECURITY;
