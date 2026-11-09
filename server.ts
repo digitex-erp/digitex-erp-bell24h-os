@@ -20,6 +20,7 @@ import * as aiRouter from "./server/ai/ProviderRouter.js";
 import { requireAuth, type AuthedRequest } from "./server/middleware/requireAuth.js";
 import { requireServiceAuth, type ServiceAuthedRequest } from "./server/middleware/requireServiceAuth.js";
 import { rateLimit } from "./server/middleware/rateLimit.js";
+import { createServiceRateLimit } from "./server/middleware/serviceRateLimit.js";
 import { emitAuditEvent, newRequestId } from "./server/audit.js";
 import { resolveRequestId } from "./server/lib/requestContext.js";
 import { sendError } from "./server/lib/errors.js";
@@ -124,7 +125,22 @@ export async function createApp() {
     return aiRouter.parseValidDeadlineMs(raw);
   };
 
-  app.post("/api/v1/ai/text", requireServiceAuth, async (req, res) => {
+  // TASK 13: shared-state (Postgres-backed) rate limiting + concurrency cap
+  // for this service-to-service endpoint. See serviceRateLimit.ts's own
+  // header comment for why the existing in-memory rateLimit() above can't
+  // be reused here. getPool is declared later in this function (same
+  // lazy-reference pattern requireOperatorAuth above already uses) -- the
+  // lambda defers resolution to request time, once getPool genuinely
+  // exists.
+  const aiTextServiceRateLimit = createServiceRateLimit({
+    name: "ai-text-s2s",
+    windowLimit: Number(process.env.AI_TEXT_RATE_LIMIT_PER_WINDOW ?? 60),
+    windowMs: Number(process.env.AI_TEXT_RATE_LIMIT_WINDOW_MS ?? 60_000),
+    maxConcurrent: Number(process.env.AI_TEXT_MAX_CONCURRENT_REQUESTS ?? 5),
+    getPool: () => getPool(),
+  });
+
+  app.post("/api/v1/ai/text", requireServiceAuth, aiTextServiceRateLimit, async (req, res) => {
     const { serviceCaller, requestId } = req as ServiceAuthedRequest;
     const { prompt, provider, policy, workflowType, temperature, maxTokens } = req.body ?? {};
 

@@ -1,0 +1,120 @@
+name: Tests and Type Check
+
+# TASK 13G: this PR branch (security/task13-ai-api-rate-limiting, PR #22) had
+# no .github/workflows directory at all -- confirmed during Task 13E/13F/13G
+# that `main` does not have one either as of this writing; a workflow of
+# this same name exists only on the still-unmerged, separate PR #16
+# (fix/tender-ingestion-approval-gate). Rather than depend on that PR landing
+# first, this file is added directly here, adapted from PR #16's own
+# already-tested design (separate jobs, no `branches:` filter on
+# pull_request, full checkout history for the whitespace check) -- not a
+# copy-paste, because this PR's own test suite is split across files that
+# `npm test` alone does not cover (see the "Run tests" step below).
+#
+# No secret or environment-variable dependency exists anywhere in this
+# repository's test or build scripts (confirmed by inspection: every
+# middleware test sets/restores its own process.env.NODE_ENV internally;
+# vite.config.ts falls back to empty strings for the Supabase env vars it
+# reads) -- this workflow deliberately references zero `secrets.*` values,
+# and the trigger below is plain `pull_request` (never `pull_request_target`,
+# which would be the dangerous choice for running base-branch secrets
+# against head-branch code on a forked PR).
+
+on:
+  # No `branches:` filter on pull_request, deliberately -- same reasoning
+  # already established on PR #16's own workflow: an allow-list of
+  # long-lived base branches silently skips any PR based on something else.
+  pull_request:
+  push:
+    branches:
+      - main
+  # Lets Task 13G trigger one real run on its own branch to verify actual
+  # GitHub Actions behavior before this file is ever pushed onto PR #22's
+  # own tracked branch -- no new PR opened just to exercise it.
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: npm test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history: the whitespace step below uses a three-dot diff,
+          # which needs a real merge base.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      # `npm test` alone only runs server/ai/*.test.ts -- it does NOT cover
+      # the middleware/auth/rate-limit test files this PR (and PR #6 before
+      # it) depend on. Those have only ever been run manually, by hand,
+      # throughout this entire review chain (Tasks 11-13F) -- never by any
+      # CI system. Listed explicitly here, by path, rather than silently
+      # changing the "test" script in package.json (out of this task's own
+      # scope, and a wider blast radius than this PR needs).
+      - name: Run tests (npm test)
+        run: npm test
+
+      - name: Run middleware, auth, and rate-limit tests
+        run: >
+          npx tsx --test
+          server/middleware/requireServiceAuth.test.ts
+          server/middleware/requireOperatorAuth.test.ts
+          server/middleware/serviceRateLimit.test.ts
+          server/middleware/__tests__/aiProvidersCredentialGrant.test.ts
+          server/middleware/__tests__/aiProvidersCredentialGrant.live.test.ts
+          src/pages/providerUpdatePayload.test.ts
+
+      # Catches trailing whitespace / conflict markers in this PR's own diff.
+      - name: Whitespace and conflict-marker check
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch --no-tags origin "${{ github.base_ref }}"
+          git diff --check "origin/${{ github.base_ref }}"...HEAD
+
+  typecheck:
+    name: tsc --noEmit
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      # KNOWN TO FAIL as of this writing, for a pre-existing, repo-wide
+      # reason unrelated to this PR -- confirmed during Task 13G: this
+      # branch has the exact same 144 tsc errors as `main`'s own base
+      # commit (byte-for-byte, except 3 cosmetic TypeScript union-ordering
+      # differences, already identified as benign in Task 13B/13D), and
+      # those 144 errors include "Cannot find namespace 'React'" across
+      # several src/*.tsx files -- the same gap already documented on PR
+      # #16's own copy of this workflow (@types/react/@types/react-dom are
+      # resolved locally only via a stray copy outside this repository; a
+      # clean `npm ci` install, as this job performs, does not have one).
+      #
+      # Deliberately NOT suppressed, NOT scoped down, and NOT marked
+      # continue-on-error, for the same reason PR #16's own workflow gives:
+      # a check that cannot fail is not enforcement. This job is expected to
+      # fail on this PR for a reason this PR did not introduce and does not
+      # fix -- that gap is tracked as a separate, pre-existing issue, not
+      # silently hidden by this workflow.
+      - name: Type check
+        run: npm run lint
