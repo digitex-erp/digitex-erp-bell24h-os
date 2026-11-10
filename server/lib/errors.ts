@@ -34,6 +34,7 @@ export type CanonicalErrorCode =
   | "POLICY_DENIED"
   | "HUMAN_APPROVAL_REQUIRED"
   | "RESOURCE_NOT_FOUND"
+  | "NOT_IMPLEMENTED"
   | "INTERNAL_ERROR";
 
 export interface CanonicalErrorEnvelope {
@@ -76,4 +77,20 @@ export function sendError(
     ...(details ? { details } : {}),
   };
   res.status(status).json(envelope);
+}
+
+/**
+ * Thrown by a job handler whose capability has no real implementation yet.
+ * Deliberately not in RETRYABLE_CODES: retrying cannot make a missing
+ * capability appear, so WorkerRegistry routes this straight to the terminal
+ * (dead-letter) state instead of scheduling retries.
+ */
+export class CapabilityNotImplementedError extends Error {
+  readonly code: CanonicalErrorCode = "NOT_IMPLEMENTED";
+  readonly retryable = false;
+
+  constructor(capability: string) {
+    super(`NOT_IMPLEMENTED: ${capability} is not implemented. No work was performed and no output exists.`);
+    this.name = "CapabilityNotImplementedError";
+  }
 }

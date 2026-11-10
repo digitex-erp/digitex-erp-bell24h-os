@@ -8,6 +8,7 @@ import pg from "pg";
 import { QueueJob } from "../../queue/QueueTypes.js";
 import { QueueManager } from "../../queue/QueueManager.js";
 import { newRequestId, emitAuditEvent } from "../../audit.js";
+import { CapabilityNotImplementedError } from "../../lib/errors.js";
 
 export interface MediaJobPayload {
   prompt: string;
@@ -36,7 +37,7 @@ export class MediaJobHandler {
    * Executes an asynchronous media task with in-flight lease renewal.
    */
   async handle(job: QueueJob<MediaJobPayload>, workerId: string): Promise<any> {
-    const { payload, organization_id, id: jobId, job_type } = job;
+    const { id: jobId, job_type } = job;
     const requestId = newRequestId();
 
     // Start periodic heartbeat timer to extend worker lease every 25 seconds
@@ -65,138 +66,30 @@ export class MediaJobHandler {
     }
   }
 
-  private async processImageJob(job: QueueJob<MediaJobPayload>, requestId: string): Promise<any> {
-    const { payload, organization_id, id: jobId } = job;
-
-    // Simulate external GPU rendering pipeline latency (e.g. 500ms)
-    await new Promise((resolve) => setTimeout(resolve, 500));
-
-    const assetUrl = `https://storage.bell24h.com/image_assets/${job.organization_id}/${jobId}_render.webp`;
-
-    // 1. Update image_jobs table
-    if (payload.job_id) {
-      await this.pool.query(
-        `
-        UPDATE public.image_jobs
-        SET status = 'completed', completed_at = NOW()
-        WHERE id = $1 AND organization_id = $2;
-        `,
-        [payload.job_id, organization_id]
-      );
-    }
-
-    // 2. Insert into image_assets table
-    if (payload.project_id) {
-      await this.pool.query(
-        `
-        INSERT INTO public.image_assets (
-          job_id,
-          project_id,
-          asset_url,
-          prompt,
-          negative_prompt,
-          provider,
-          model,
-          resolution,
-          organization_id,
-          created_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW());
-        `,
-        [
-          payload.job_id || jobId,
-          payload.project_id,
-          assetUrl,
-          payload.prompt,
-          payload.negative_prompt || null,
-          payload.providerId || "flux",
-          payload.model || "flux-1-schnell",
-          payload.aspect_ratio || "1:1",
-          organization_id,
-        ]
-      );
-    }
-
-    emitAuditEvent({
-      actor: "service:worker",
-      organizationId: organization_id,
-      action: "job.media.image_completed",
-      targetType: "job_queue",
-      targetId: jobId,
-      outcome: "success",
-      requestId,
-      metadata: { assetUrl, model: payload.model },
-    });
-
-    return { assetUrl, status: "completed" };
+  // No image provider is wired in. This used to sleep, invent a storage URL
+  // and record success; it now fails without writing anything, so a job can
+  // never look completed when no image exists.
+  private async processImageJob(job: QueueJob<MediaJobPayload>, requestId: string): Promise<never> {
+    return this.failNotImplemented(job, requestId, "image");
   }
 
-  private async processVideoJob(job: QueueJob<MediaJobPayload>, requestId: string): Promise<any> {
-    const { payload, organization_id, id: jobId } = job;
+  // Same as processImageJob: no video provider is wired in.
+  private async processVideoJob(job: QueueJob<MediaJobPayload>, requestId: string): Promise<never> {
+    return this.failNotImplemented(job, requestId, "video");
+  }
 
-    // Simulate external video rendering pipeline latency
-    await new Promise((resolve) => setTimeout(resolve, 800));
-
-    const assetUrl = `https://storage.bell24h.com/video_assets/${job.organization_id}/${jobId}_master.mp4`;
-    const thumbnailUrl = `https://storage.bell24h.com/video_assets/${job.organization_id}/${jobId}_thumb.webp`;
-
-    // 1. Update video_jobs table
-    if (payload.job_id) {
-      await this.pool.query(
-        `
-        UPDATE public.video_jobs
-        SET status = 'completed', completed_at = NOW()
-        WHERE id = $1 AND organization_id = $2;
-        `,
-        [payload.job_id, organization_id]
-      );
-    }
-
-    // 2. Insert into video_assets table
-    if (payload.project_id) {
-      await this.pool.query(
-        `
-        INSERT INTO public.video_assets (
-          job_id,
-          project_id,
-          asset_url,
-          thumbnail_url,
-          video_type,
-          prompt,
-          provider,
-          model,
-          resolution,
-          duration,
-          organization_id,
-          created_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW());
-        `,
-        [
-          payload.job_id || jobId,
-          payload.project_id,
-          assetUrl,
-          thumbnailUrl,
-          payload.video_type || "reel",
-          payload.prompt,
-          payload.providerId || "opensora",
-          payload.model || "opensora-1.2",
-          payload.quality || "1080p",
-          payload.duration || "15s",
-          organization_id,
-        ]
-      );
-    }
-
+  private failNotImplemented(job: QueueJob<MediaJobPayload>, requestId: string, kind: "image" | "video"): never {
+    const error = new CapabilityNotImplementedError(`${kind} generation`);
     emitAuditEvent({
       actor: "service:worker",
-      organizationId: organization_id,
-      action: "job.media.video_completed",
+      organizationId: job.organization_id,
+      action: `job.media.${kind}_failed`,
       targetType: "job_queue",
-      targetId: jobId,
-      outcome: "success",
+      targetId: job.id,
+      outcome: "failure",
       requestId,
-      metadata: { assetUrl, duration: payload.duration },
+      metadata: { errorCode: error.code, retryable: error.retryable },
     });
-
-    return { assetUrl, thumbnailUrl, status: "completed" };
+    throw error;
   }
 }

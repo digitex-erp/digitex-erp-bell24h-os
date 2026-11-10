@@ -7,6 +7,7 @@
 import pg from "pg";
 import { QueueJob } from "../../queue/QueueTypes.js";
 import { newRequestId, emitAuditEvent } from "../../audit.js";
+import { CapabilityNotImplementedError } from "../../lib/errors.js";
 
 export interface PublishingJobPayload {
   queue_id?: string;
@@ -26,61 +27,23 @@ export class PublishingJobHandler {
   }
 
   /**
-   * Executes a publishing/distribution task.
+   * No publishing channel integration is wired in. This used to sleep, invent
+   * a post ID and record the item as published; it now fails without writing
+   * anything, so content can never look published when nothing was sent.
    */
-  async handle(job: QueueJob<PublishingJobPayload>): Promise<any> {
-    const { payload, organization_id, id: jobId } = job;
+  async handle(job: QueueJob<PublishingJobPayload>): Promise<never> {
     const requestId = newRequestId();
-
-    // Simulate channel dispatch
-    await new Promise((resolve) => setTimeout(resolve, 300));
-
-    const externalPostId = `post_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-
-    // 1. Update publishing_queue record if linked
-    if (payload.queue_id) {
-      await this.pool.query(
-        `
-        UPDATE public.publishing_queue
-        SET status = 'published'
-        WHERE id = $1 AND organization_id = $2;
-        `,
-        [payload.queue_id, organization_id]
-      );
-
-      // 2. Insert into publishing_history
-      await this.pool.query(
-        `
-        INSERT INTO public.publishing_history (
-          queue_id,
-          organization_id,
-          published_at,
-          result
-        ) VALUES ($1, $2, NOW(), $3);
-        `,
-        [
-          payload.queue_id,
-          organization_id,
-          JSON.stringify({ externalPostId, channel: payload.channel_type || "web", status: "published" }),
-        ]
-      );
-    }
-
+    const error = new CapabilityNotImplementedError("channel publishing");
     emitAuditEvent({
       actor: "service:worker",
-      organizationId: organization_id,
-      action: "job.publishing.completed",
+      organizationId: job.organization_id,
+      action: "job.publishing.failed",
       targetType: "job_queue",
-      targetId: jobId,
-      outcome: "success",
+      targetId: job.id,
+      outcome: "failure",
       requestId,
-      metadata: { externalPostId, channel: payload.channel_type },
+      metadata: { errorCode: error.code, retryable: error.retryable },
     });
-
-    return {
-      externalPostId,
-      status: "published",
-      publishedAt: new Date().toISOString(),
-    };
+    throw error;
   }
 }

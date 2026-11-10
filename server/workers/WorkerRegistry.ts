@@ -12,6 +12,7 @@ import { AIJobHandler } from "./handlers/AIJobHandler.js";
 import { MediaJobHandler } from "./handlers/MediaJobHandler.js";
 import { PublishingJobHandler } from "./handlers/PublishingJobHandler.js";
 import { emitAuditEvent } from "../audit.js";
+import { CapabilityNotImplementedError } from "../lib/errors.js";
 
 export interface WorkerOptions {
   workerId?: string;
@@ -305,7 +306,9 @@ export class WorkerRegistry {
         jobId: job.id,
         workerId: this.workerId,
         error: err,
-        isTerminal: false,
+        // A missing capability cannot succeed on retry; everything else keeps
+        // the existing retry-with-backoff behaviour.
+        isTerminal: err instanceof CapabilityNotImplementedError,
       });
     }
   }
