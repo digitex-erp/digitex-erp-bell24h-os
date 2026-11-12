@@ -30,6 +30,8 @@ import { CampaignDashboardPage } from "@/pages/CampaignDashboardPage";
 import { CampaignBuilderPage } from "@/pages/CampaignBuilderPage";
 import { MediaComposerDashboardPage } from "@/pages/MediaComposerDashboardPage";
 import { PublishingCenterPage } from "@/pages/PublishingCenterPage";
+import { CapabilityGate } from "@/components/CapabilityGate";
+import { ENABLE_IMAGE_STUDIO, ENABLE_VIDEO_STUDIO, ENABLE_PUBLISHING } from "@/lib/featureFlags";
 import { AutomationDashboardPage } from "@/pages/AutomationDashboardPage";
 import { AutomationBuilderPage } from "@/pages/AutomationBuilderPage";
 import { PerformanceDashboardPage } from "@/pages/PerformanceDashboardPage";
@@ -96,8 +98,8 @@ export default function App() {
           <Route path="ai-router" element={<AiRouterDashboardPage />} />
           <Route path="prompt-studio" element={<PromptStudioPage />} />
           <Route path="content-planner" element={<ContentPlannerPage />} />
-          <Route path="image-studio" element={<ImageStudioPage />} />
-          <Route path="video-studio" element={<VideoStudioPage />} />
+          <Route path="image-studio" element={<CapabilityGate enabled={ENABLE_IMAGE_STUDIO} name="Image Studio"><ImageStudioPage /></CapabilityGate>} />
+          <Route path="video-studio" element={<CapabilityGate enabled={ENABLE_VIDEO_STUDIO} name="Video Studio"><VideoStudioPage /></CapabilityGate>} />
           <Route path="job-orchestrator" element={<JobOrchestratorPage />} />
           <Route path="context-profiles" element={<ContextProfileManagerPage />} />
           <Route path="seo" element={<SeoCenterPage />} />
@@ -107,7 +109,7 @@ export default function App() {
           <Route path="campaigns" element={<CampaignDashboardPage />} />
           <Route path="campaigns/builder" element={<CampaignBuilderPage />} />
           <Route path="media-composer" element={<MediaComposerDashboardPage />} />
-          <Route path="publishing-center" element={<PublishingCenterPage />} />
+          <Route path="publishing-center" element={<CapabilityGate enabled={ENABLE_PUBLISHING} name="Publishing Center"><PublishingCenterPage /></CapabilityGate>} />
           <Route path="automation" element={<AutomationDashboardPage />} />
           <Route path="automation/builder" element={<AutomationBuilderPage />} />
           <Route path="performance-intelligence" element={<PerformanceDashboardPage />} />
