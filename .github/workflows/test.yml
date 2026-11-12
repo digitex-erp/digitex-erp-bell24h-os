@@ -76,6 +76,10 @@ jobs:
           server/middleware/__tests__/aiProvidersCredentialGrant.test.ts
           server/middleware/__tests__/aiProvidersCredentialGrant.live.test.ts
           src/pages/providerUpdatePayload.test.ts
+          server/workers/handlers/honestHandlers.test.ts
+          server/routes/queueEnqueue.test.ts
+          src/lib/featureFlags.test.ts
+          scripts/task15b/task15bScripts.test.ts
 
       # Catches trailing whitespace / conflict markers in this PR's own diff.
       - name: Whitespace and conflict-marker check

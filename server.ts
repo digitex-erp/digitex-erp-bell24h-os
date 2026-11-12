@@ -27,6 +27,7 @@ import { sendError } from "./server/lib/errors.js";
 import { postgrestFetch, SupabaseRestError } from "./server/lib/supabaseRest.js";
 import { QueueManager } from "./server/queue/QueueManager.js";
 import { WorkerRegistry } from "./server/workers/WorkerRegistry.js";
+import { createEnqueueHandler } from "./server/routes/queueEnqueue.js";
 import { WorkerSupervisor } from "./server/workers/WorkerSupervisor.js";
 import { seoRoutes } from "./server/routes/seoRoutes.js";
 import { requireAnyRole } from "./server/communication/rbac.js";
@@ -369,35 +370,7 @@ export async function createApp() {
     }
   });
 
-  app.post("/api/v1/queue/enqueue", requireAuth, async (req, res) => {
-    const { auth } = req as AuthedRequest;
-    const { jobType, payload, priority, idempotencyKey, scheduledAt, timeoutMs, maxRetries, dependencies } = req.body;
-
-    if (!jobType || !payload) {
-      res.status(400).json({ error: "jobType and payload are required" });
-      return;
-    }
-
-    try {
-      const qm = getQueueManager();
-      const job = await qm.enqueueJob({
-        organizationId: auth!.organizationId,
-        jobType,
-        payload,
-        priority,
-        idempotencyKey,
-        scheduledAt: scheduledAt ? new Date(scheduledAt) : undefined,
-        timeoutMs,
-        maxRetries,
-        dependencies,
-      });
-
-      res.status(201).json({ success: true, job });
-    } catch (err: any) {
-      console.error("[Runtime] Enqueue error:", err.message);
-      res.status(500).json({ error: err.message });
-    }
-  });
+  app.post("/api/v1/queue/enqueue", requireAuth, createEnqueueHandler(getQueueManager));
 
   const getWorkerRegistry = () => WorkerRegistry.getInstance(getPool(), getQueueManager());
   const getWorkerSupervisor = () => WorkerSupervisor.getInstance(getPool(), getQueueManager());
